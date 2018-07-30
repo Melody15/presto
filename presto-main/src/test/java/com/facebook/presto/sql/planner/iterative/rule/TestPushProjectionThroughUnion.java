@@ -33,7 +33,6 @@ public class TestPushProjectionThroughUnion
 {
     @Test
     public void testDoesNotFire()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughUnion())
                 .on(p ->
@@ -45,7 +44,6 @@ public class TestPushProjectionThroughUnion
 
     @Test
     public void test()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughUnion())
                 .on(p -> {
@@ -54,7 +52,7 @@ public class TestPushProjectionThroughUnion
                     Symbol c = p.symbol("c");
                     Symbol cTimes3 = p.symbol("c_times_3");
                     return p.project(
-                            Assignments.of(cTimes3, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.MULTIPLY, c.toSymbolReference(), new LongLiteral("3"))),
+                            Assignments.of(cTimes3, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, c.toSymbolReference(), new LongLiteral("3"))),
                             p.union(
                                     ImmutableListMultimap.<Symbol, Symbol>builder()
                                             .put(c, a)

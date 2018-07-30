@@ -17,10 +17,10 @@ import com.facebook.presto.matching.Capture;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.matching.PropertyPattern;
+import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
-import com.facebook.presto.sql.planner.iterative.RuleSet;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
@@ -50,22 +50,20 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 public class GatherAndMergeWindows
-        implements RuleSet
 {
-    // TODO convert to a pattern that allows for a sequence of ProjectNode, instead
-    // of a canned number, once the pattern system supports it.
-    private static final Set<Rule<?>> RULES =
-            IntStream.range(0, 5)
-                    .boxed()
-                    .flatMap(numProjects ->
-                            Stream.of(
-                                    new MergeAdjacentWindowsOverProjects(numProjects),
-                                    new SwapAdjacentWindowsBySpecifications(numProjects)))
-                    .collect(toImmutableSet());
+    private GatherAndMergeWindows() {}
 
-    public Set<Rule<?>> rules()
+    public static Set<Rule<?>> rules()
     {
-        return RULES;
+        // TODO convert to a pattern that allows for a sequence of ProjectNode, instead
+        // of a canned number, once the pattern system supports it.
+        return IntStream.range(0, 5)
+                        .boxed()
+                        .flatMap(numProjects ->
+                                Stream.of(
+                                        new MergeAdjacentWindowsOverProjects(numProjects),
+                                        new SwapAdjacentWindowsBySpecifications(numProjects)))
+                        .collect(toImmutableSet());
     }
 
     private abstract static class ManipulateAdjacentWindowsOverProjects
@@ -269,8 +267,20 @@ public class GatherAndMergeWindows
 
         private static int compareOrderBy(WindowNode o1, WindowNode o2)
         {
-            Iterator<Symbol> iterator1 = o1.getOrderBy().iterator();
-            Iterator<Symbol> iterator2 = o2.getOrderBy().iterator();
+            if (!o1.getOrderingScheme().isPresent() && !o2.getOrderingScheme().isPresent()) {
+                return 0;
+            }
+            else if (o1.getOrderingScheme().isPresent() && !o2.getOrderingScheme().isPresent()) {
+                return 1;
+            }
+            else if (!o1.getOrderingScheme().isPresent() && o2.getOrderingScheme().isPresent()) {
+                return -1;
+            }
+
+            OrderingScheme o1OrderingScheme = o1.getOrderingScheme().get();
+            OrderingScheme o2OrderingScheme = o2.getOrderingScheme().get();
+            Iterator<Symbol> iterator1 = o1OrderingScheme.getOrderBy().iterator();
+            Iterator<Symbol> iterator2 = o2OrderingScheme.getOrderBy().iterator();
 
             while (iterator1.hasNext() && iterator2.hasNext()) {
                 Symbol symbol1 = iterator1.next();
@@ -281,7 +291,7 @@ public class GatherAndMergeWindows
                     return orderByComparison;
                 }
                 else {
-                    int sortOrderComparison = o1.getOrderings().get(symbol1).compareTo(o2.getOrderings().get(symbol2));
+                    int sortOrderComparison = o1OrderingScheme.getOrdering(symbol1).compareTo(o2OrderingScheme.getOrdering(symbol2));
                     if (sortOrderComparison != 0) {
                         return sortOrderComparison;
                     }

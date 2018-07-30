@@ -28,6 +28,7 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.succinctBytes;
+import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -56,6 +57,8 @@ public class OperatorStats
     private final DataSize outputDataSize;
     private final long outputPositions;
 
+    private final DataSize physicalWrittenDataSize;
+
     private final Duration blockedWall;
 
     private final long finishCalls;
@@ -63,9 +66,13 @@ public class OperatorStats
     private final Duration finishCpu;
     private final Duration finishUser;
 
-    private final DataSize memoryReservation;
+    private final DataSize userMemoryReservation;
     private final DataSize revocableMemoryReservation;
     private final DataSize systemMemoryReservation;
+    private final DataSize peakUserMemoryReservation;
+    private final DataSize peakSystemMemoryReservation;
+    private final DataSize peakTotalMemoryReservation;
+
     private final Optional<BlockedReason> blockedReason;
 
     private final OperatorInfo info;
@@ -94,6 +101,8 @@ public class OperatorStats
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
 
+            @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
+
             @JsonProperty("blockedWall") Duration blockedWall,
 
             @JsonProperty("finishCalls") long finishCalls,
@@ -101,9 +110,13 @@ public class OperatorStats
             @JsonProperty("finishCpu") Duration finishCpu,
             @JsonProperty("finishUser") Duration finishUser,
 
-            @JsonProperty("memoryReservation") DataSize memoryReservation,
+            @JsonProperty("userMemoryReservation") DataSize userMemoryReservation,
             @JsonProperty("revocableMemoryReservation") DataSize revocableMemoryReservation,
             @JsonProperty("systemMemoryReservation") DataSize systemMemoryReservation,
+            @JsonProperty("peakUserMemoryReservation") DataSize peakUserMemoryReservation,
+            @JsonProperty("peakSystemMemoryReservation") DataSize peakSystemMemoryReservation,
+            @JsonProperty("peakTotalMemoryReservation") DataSize peakTotalMemoryReservation,
+
             @JsonProperty("blockedReason") Optional<BlockedReason> blockedReason,
 
             @JsonProperty("info") OperatorInfo info)
@@ -134,6 +147,8 @@ public class OperatorStats
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
 
+        this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "writtenDataSize is null");
+
         this.blockedWall = requireNonNull(blockedWall, "blockedWall is null");
 
         this.finishCalls = finishCalls;
@@ -141,9 +156,14 @@ public class OperatorStats
         this.finishCpu = requireNonNull(finishCpu, "finishCpu is null");
         this.finishUser = requireNonNull(finishUser, "finishUser is null");
 
-        this.memoryReservation = requireNonNull(memoryReservation, "memoryReservation is null");
+        this.userMemoryReservation = requireNonNull(userMemoryReservation, "userMemoryReservation is null");
         this.revocableMemoryReservation = requireNonNull(revocableMemoryReservation, "revocableMemoryReservation is null");
         this.systemMemoryReservation = requireNonNull(systemMemoryReservation, "systemMemoryReservation is null");
+
+        this.peakUserMemoryReservation = requireNonNull(peakUserMemoryReservation, "peakUserMemoryReservation is null");
+        this.peakSystemMemoryReservation = requireNonNull(peakSystemMemoryReservation, "peakSystemMemoryReservation is null");
+        this.peakTotalMemoryReservation = requireNonNull(peakTotalMemoryReservation, "peakTotalMemoryReservation is null");
+
         this.blockedReason = blockedReason;
 
         this.info = info;
@@ -258,6 +278,12 @@ public class OperatorStats
     }
 
     @JsonProperty
+    public DataSize getPhysicalWrittenDataSize()
+    {
+        return physicalWrittenDataSize;
+    }
+
+    @JsonProperty
     public Duration getBlockedWall()
     {
         return blockedWall;
@@ -288,9 +314,9 @@ public class OperatorStats
     }
 
     @JsonProperty
-    public DataSize getMemoryReservation()
+    public DataSize getUserMemoryReservation()
     {
-        return memoryReservation;
+        return userMemoryReservation;
     }
 
     @JsonProperty
@@ -303,6 +329,24 @@ public class OperatorStats
     public DataSize getSystemMemoryReservation()
     {
         return systemMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakUserMemoryReservation()
+    {
+        return peakUserMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakSystemMemoryReservation()
+    {
+        return peakSystemMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakTotalMemoryReservation()
+    {
+        return peakTotalMemoryReservation;
     }
 
     @JsonProperty
@@ -342,6 +386,8 @@ public class OperatorStats
         long outputDataSize = this.outputDataSize.toBytes();
         long outputPositions = this.outputPositions;
 
+        long physicalWrittenDataSize = this.physicalWrittenDataSize.toBytes();
+
         long blockedWall = this.blockedWall.roundTo(NANOSECONDS);
 
         long finishCalls = this.finishCalls;
@@ -349,9 +395,13 @@ public class OperatorStats
         long finishCpu = this.finishCpu.roundTo(NANOSECONDS);
         long finishUser = this.finishUser.roundTo(NANOSECONDS);
 
-        long memoryReservation = this.memoryReservation.toBytes();
+        long memoryReservation = this.userMemoryReservation.toBytes();
         long revocableMemoryReservation = this.revocableMemoryReservation.toBytes();
         long systemMemoryReservation = this.systemMemoryReservation.toBytes();
+        long peakUserMemory = this.peakUserMemoryReservation.toBytes();
+        long peakSystemMemory = this.peakSystemMemoryReservation.toBytes();
+        long peakTotalMemory = this.peakTotalMemoryReservation.toBytes();
+
         Optional<BlockedReason> blockedReason = this.blockedReason;
 
         Mergeable<OperatorInfo> base = getMergeableInfoOrNull(info);
@@ -375,6 +425,8 @@ public class OperatorStats
             outputDataSize += operator.getOutputDataSize().toBytes();
             outputPositions += operator.getOutputPositions();
 
+            physicalWrittenDataSize += operator.getPhysicalWrittenDataSize().toBytes();
+
             finishCalls += operator.getFinishCalls();
             finishWall += operator.getFinishWall().roundTo(NANOSECONDS);
             finishCpu += operator.getFinishCpu().roundTo(NANOSECONDS);
@@ -382,9 +434,14 @@ public class OperatorStats
 
             blockedWall += operator.getBlockedWall().roundTo(NANOSECONDS);
 
-            memoryReservation += operator.getMemoryReservation().toBytes();
+            memoryReservation += operator.getUserMemoryReservation().toBytes();
             revocableMemoryReservation += operator.getRevocableMemoryReservation().toBytes();
             systemMemoryReservation += operator.getSystemMemoryReservation().toBytes();
+
+            peakUserMemory = max(peakUserMemory, operator.getPeakUserMemoryReservation().toBytes());
+            peakSystemMemory = max(peakSystemMemory, operator.getPeakSystemMemoryReservation().toBytes());
+            peakTotalMemory = max(peakTotalMemory, operator.getPeakTotalMemoryReservation().toBytes());
+
             if (operator.getBlockedReason().isPresent()) {
                 blockedReason = operator.getBlockedReason();
             }
@@ -418,6 +475,8 @@ public class OperatorStats
                 succinctBytes(outputDataSize),
                 outputPositions,
 
+                succinctBytes(physicalWrittenDataSize),
+
                 new Duration(blockedWall, NANOSECONDS).convertToMostSuccinctTimeUnit(),
 
                 finishCalls,
@@ -428,6 +487,10 @@ public class OperatorStats
                 succinctBytes(memoryReservation),
                 succinctBytes(revocableMemoryReservation),
                 succinctBytes(systemMemoryReservation),
+                succinctBytes(peakUserMemory),
+                succinctBytes(peakSystemMemory),
+                succinctBytes(peakTotalMemory),
+
                 blockedReason,
 
                 (OperatorInfo) base);
@@ -470,14 +533,18 @@ public class OperatorStats
                 getOutputUser,
                 outputDataSize,
                 outputPositions,
+                physicalWrittenDataSize,
                 blockedWall,
                 finishCalls,
                 finishWall,
                 finishCpu,
                 finishUser,
-                memoryReservation,
+                userMemoryReservation,
                 revocableMemoryReservation,
                 systemMemoryReservation,
+                peakUserMemoryReservation,
+                peakSystemMemoryReservation,
+                peakTotalMemoryReservation,
                 blockedReason,
                 (info != null && info.isFinal()) ? info : null);
     }

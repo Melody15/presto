@@ -143,11 +143,11 @@ public class TestingMetadata
     }
 
     @Override
-    public List<SchemaTableName> listTables(ConnectorSession session, String schemaNameOrNull)
+    public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName)
     {
         ImmutableList.Builder<SchemaTableName> builder = ImmutableList.builder();
         for (SchemaTableName tableName : tables.keySet()) {
-            if (schemaNameOrNull == null || schemaNameOrNull.equals(tableName.getSchemaName())) {
+            if (schemaName.map(tableName.getSchemaName()::equals).orElse(true)) {
                 builder.add(tableName);
             }
         }
@@ -166,10 +166,12 @@ public class TestingMetadata
     }
 
     @Override
-    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
     {
         ConnectorTableMetadata existingTable = tables.putIfAbsent(tableMetadata.getTable(), tableMetadata);
-        checkArgument(existingTable == null, "Table %s already exists", tableMetadata.getTable());
+        if (existingTable != null && !ignoreExisting) {
+            throw new IllegalArgumentException("Target table already exists: " + tableMetadata.getTable());
+        }
     }
 
     @Override
@@ -198,11 +200,11 @@ public class TestingMetadata
     }
 
     @Override
-    public List<SchemaTableName> listViews(ConnectorSession session, String schemaNameOrNull)
+    public List<SchemaTableName> listViews(ConnectorSession session, Optional<String> schemaName)
     {
         ImmutableList.Builder<SchemaTableName> builder = ImmutableList.builder();
         for (SchemaTableName viewName : views.keySet()) {
-            if ((schemaNameOrNull == null) || schemaNameOrNull.equals(viewName.getSchemaName())) {
+            if (schemaName.map(viewName.getSchemaName()::equals).orElse(true)) {
                 builder.add(viewName);
             }
         }
@@ -224,7 +226,7 @@ public class TestingMetadata
     @Override
     public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Optional<ConnectorNewTableLayout> layout)
     {
-        createTable(session, tableMetadata);
+        createTable(session, tableMetadata, false);
         return TestingHandle.INSTANCE;
     }
 

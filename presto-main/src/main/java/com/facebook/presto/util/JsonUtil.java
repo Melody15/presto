@@ -23,7 +23,7 @@ import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.MapType;
 import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.RowType.RowField;
+import com.facebook.presto.spi.type.RowType.Field;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.BigintOperators;
@@ -43,17 +43,17 @@ import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
 
 import java.io.IOException;
-import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INSUFFICIENT_RESOURCES;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
@@ -90,6 +90,7 @@ import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.math.RoundingMode.HALF_UP;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
 public final class JsonUtil
@@ -108,7 +109,9 @@ public final class JsonUtil
     public static JsonParser createJsonParser(JsonFactory factory, Slice json)
             throws IOException
     {
-        return factory.createParser((InputStream) json.getInput());
+        // Jackson tries to detect the character encoding automatically when using InputStream
+        // so we pass an InputStreamReader instead.
+        return factory.createParser(new InputStreamReader(json.getInput(), UTF_8));
     }
 
     public static JsonGenerator createJsonGenerator(JsonFactory factory, SliceOutput output)
@@ -901,7 +904,7 @@ public final class JsonUtil
                             mapType.getKeyType());
                 case StandardTypes.ROW:
                     RowType rowType = (RowType) type;
-                    List<RowField> rowFields = rowType.getFields();
+                    List<Field> rowFields = rowType.getFields();
                     BlockBuilderAppender[] fieldAppenders = new BlockBuilderAppender[rowFields.size()];
                     for (int i = 0; i < fieldAppenders.length; i++) {
                         fieldAppenders[i] = createBlockBuilderAppender(rowFields.get(i).getType());
@@ -1212,7 +1215,7 @@ public final class JsonUtil
         }
     }
 
-    public static Optional<Map<String, Integer>> getFieldNameToIndex(List<RowField> rowFields)
+    public static Optional<Map<String, Integer>> getFieldNameToIndex(List<Field> rowFields)
     {
         if (!rowFields.get(0).getName().isPresent()) {
             return Optional.empty();
@@ -1256,7 +1259,7 @@ public final class JsonUtil
                 if (parser.currentToken() != FIELD_NAME) {
                     throw new JsonCastException(format("Expected a json field name, but got %s", parser.getText()));
                 }
-                String fieldName = parser.getText().toLowerCase();
+                String fieldName = parser.getText().toLowerCase(Locale.ENGLISH);
                 Integer fieldIndex = fieldNameToIndex.get().get(fieldName);
                 parser.nextToken();
                 if (fieldIndex != null) {
@@ -1273,11 +1276,11 @@ public final class JsonUtil
             }
 
             if (numFieldsWritten != fieldAppenders.length) {
-                String missingFieldNames = fieldNameToIndex.get().entrySet().stream()
-                        .filter(entry -> !fieldWritten[entry.getValue()])
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.joining(", "));
-                throw new JsonCastException("Missing fields: " + missingFieldNames);
+                for (int i = 0; i < fieldWritten.length; i++) {
+                    if (!fieldWritten[i]) {
+                        singleRowBlockWriter.getFieldBlockBuilder(i).appendNull();
+                    }
+                }
             }
         }
     }

@@ -85,7 +85,8 @@ public class TestShardMetadataRecordCursor
                 .column("orderkey", BIGINT)
                 .column("orderdate", DATE)
                 .property("temporal_column", "orderdate")
-                .build());
+                .build(),
+                false);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -96,7 +97,6 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testSimple()
-            throws Exception
     {
         ShardManager shardManager = createShardManager(dbi);
 
@@ -152,17 +152,18 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testNoSchemaFilter()
-            throws Exception
     {
         // Create "orders" table in a different schema
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("other", "orders"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         // Create another table that should not be selected
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()
@@ -179,17 +180,18 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testNoTableFilter()
-            throws Exception
     {
         // Create "orders" table in a different schema
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("test", "orders2"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         // Create another table that should not be selected
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()

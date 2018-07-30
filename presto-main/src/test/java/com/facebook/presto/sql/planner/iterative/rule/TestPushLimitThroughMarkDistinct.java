@@ -27,14 +27,13 @@ public class TestPushLimitThroughMarkDistinct
 {
     @Test
     public void test()
-            throws Exception
     {
         tester().assertThat(new PushLimitThroughMarkDistinct())
                 .on(p ->
                         p.limit(
                                 1,
                                 p.markDistinct(
-                                        p.values(), p.symbol("foo"), emptyList())))
+                                        p.symbol("foo"), emptyList(), p.values())))
                 .matches(
                         node(MarkDistinctNode.class,
                                 node(LimitNode.class,
@@ -43,16 +42,15 @@ public class TestPushLimitThroughMarkDistinct
 
     @Test
     public void testDoesNotFire()
-            throws Exception
     {
         tester().assertThat(new PushLimitThroughMarkDistinct())
                 .on(p ->
                         p.markDistinct(
+                                p.symbol("foo"),
+                                emptyList(),
                                 p.limit(
                                         1,
-                                        p.values()),
-                                p.symbol("foo"),
-                                emptyList()))
+                                        p.values())))
                 .doesNotFire();
     }
 }

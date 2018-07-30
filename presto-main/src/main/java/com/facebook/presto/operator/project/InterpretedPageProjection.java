@@ -16,27 +16,28 @@ package com.facebook.presto.operator.project;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.DriverYieldSignal;
+import com.facebook.presto.operator.Work;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.DeterminismEvaluator;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolToInputParameterRewriter;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.NodeRef;
 import com.google.common.collect.ImmutableMap;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 
@@ -50,7 +51,7 @@ public class InterpretedPageProjection
 
     public InterpretedPageProjection(
             Expression expression,
-            Map<Symbol, Type> symbolTypes,
+            TypeProvider symbolTypes,
             Map<Symbol, Integer> symbolToInputMappings,
             Metadata metadata,
             SqlParser sqlParser,
@@ -71,7 +72,7 @@ public class InterpretedPageProjection
         Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(session, metadata, sqlParser, parameterTypes.build(), rewritten, emptyList());
         this.evaluator = ExpressionInterpreter.expressionInterpreter(rewritten, metadata, session, expressionTypes);
 
-        blockBuilder = evaluator.getType().createBlockBuilder(new BlockBuilderStatus(), 1);
+        blockBuilder = evaluator.getType().createBlockBuilder(null, 1);
     }
 
     @Override
@@ -93,55 +94,64 @@ public class InterpretedPageProjection
     }
 
     @Override
-    public PageProjectionOutput project(ConnectorSession session, DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
+    public Work<Block> project(ConnectorSession session, DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
     {
-        return new InterpretedPageProjectionOutput(yieldSignal, page, selectedPositions);
+        return new InterpretedPageProjectionWork(yieldSignal, page, selectedPositions);
     }
 
-    private class InterpretedPageProjectionOutput
-            implements PageProjectionOutput
+    private class InterpretedPageProjectionWork
+            implements Work<Block>
     {
         private final DriverYieldSignal yieldSignal;
-        private final Block[] blocks;
+        private final Page page;
         private final SelectedPositions selectedPositions;
 
         private int nextIndexOrPosition;
+        private Block result;
 
-        public InterpretedPageProjectionOutput(DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
+        public InterpretedPageProjectionWork(DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
         {
             this.yieldSignal = requireNonNull(yieldSignal, "yieldSignal is null");
-            this.blocks = requireNonNull(page, "page is null").getBlocks();
+            this.page = requireNonNull(page, "page is null");
             this.selectedPositions = requireNonNull(selectedPositions, "selectedPositions is null");
             this.nextIndexOrPosition = selectedPositions.getOffset();
         }
 
         @Override
-        public Optional<Block> compute()
+        public boolean process()
         {
+            checkState(result == null, "result has been generated");
             int length = selectedPositions.getOffset() + selectedPositions.size();
             if (selectedPositions.isList()) {
                 int[] positions = selectedPositions.getPositions();
                 while (nextIndexOrPosition < length) {
-                    writeNativeValue(evaluator.getType(), blockBuilder, evaluator.evaluate(positions[nextIndexOrPosition], blocks));
+                    writeNativeValue(evaluator.getType(), blockBuilder, evaluator.evaluate(positions[nextIndexOrPosition], page));
                     nextIndexOrPosition++;
                     if (yieldSignal.isSet()) {
-                        return Optional.empty();
+                        return false;
                     }
                 }
             }
             else {
                 while (nextIndexOrPosition < length) {
-                    writeNativeValue(evaluator.getType(), blockBuilder, evaluator.evaluate(nextIndexOrPosition, blocks));
+                    writeNativeValue(evaluator.getType(), blockBuilder, evaluator.evaluate(nextIndexOrPosition, page));
                     nextIndexOrPosition++;
                     if (yieldSignal.isSet()) {
-                        return Optional.empty();
+                        return false;
                     }
                 }
             }
 
-            Block block = blockBuilder.build();
-            blockBuilder = blockBuilder.newBlockBuilderLike(new BlockBuilderStatus());
-            return Optional.of(block);
+            result = blockBuilder.build();
+            blockBuilder = blockBuilder.newBlockBuilderLike(null);
+            return true;
+        }
+
+        @Override
+        public Block getResult()
+        {
+            checkState(result != null, "result has not been generated");
+            return result;
         }
     }
 }

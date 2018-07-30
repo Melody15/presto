@@ -49,8 +49,8 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.sql.QueryUtil.identifier;
-import static com.facebook.presto.sql.tree.ComparisonExpressionType.EQUAL;
-import static com.facebook.presto.sql.tree.ComparisonExpressionType.GREATER_THAN;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.EQUAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.GREATER_THAN;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static org.testng.Assert.assertEquals;
@@ -62,7 +62,6 @@ public class TestEqualityInference
 {
     @Test
     public void testTransitivity()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         addEquality("a1", "b1", builder);
@@ -103,7 +102,6 @@ public class TestEqualityInference
 
     @Test
     public void testTriviallyRewritable()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         Expression expression = builder.build()
@@ -114,7 +112,6 @@ public class TestEqualityInference
 
     @Test
     public void testUnrewritable()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         addEquality("a1", "b1", builder);
@@ -127,7 +124,6 @@ public class TestEqualityInference
 
     @Test
     public void testParseEqualityExpression()
-            throws Exception
     {
         EqualityInference inference = new EqualityInference.Builder()
                 .addEquality(equals("a1", "b1"))
@@ -141,7 +137,6 @@ public class TestEqualityInference
 
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testInvalidEqualityExpression1()
-            throws Exception
     {
         new EqualityInference.Builder()
                 .addEquality(equals("a1", "a1"));
@@ -149,7 +144,6 @@ public class TestEqualityInference
 
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testInvalidEqualityExpression2()
-            throws Exception
     {
         new EqualityInference.Builder()
                 .addEquality(someExpression("a1", "b1"));
@@ -157,7 +151,6 @@ public class TestEqualityInference
 
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testInvalidEqualityExpression3()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         addEquality("a1", "a1", builder);
@@ -165,7 +158,6 @@ public class TestEqualityInference
 
     @Test
     public void testExtractInferrableEqualities()
-            throws Exception
     {
         EqualityInference inference = new EqualityInference.Builder()
                 .extractInferenceCandidates(ExpressionUtils.and(equals("a1", "b1"), equals("b1", "c1"), someExpression("c1", "d1")))
@@ -180,7 +172,6 @@ public class TestEqualityInference
 
     @Test
     public void testEqualityPartitionGeneration()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         builder.addEquality(nameReference("a1"), nameReference("b1"));
@@ -233,7 +224,6 @@ public class TestEqualityInference
 
     @Test
     public void testMultipleEqualitySetsPredicateGeneration()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         addEquality("a1", "b1", builder);
@@ -281,7 +271,6 @@ public class TestEqualityInference
 
     @Test
     public void testSubExpressionRewrites()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         builder.addEquality(nameReference("a1"), add("b", "c")); // a1 = b + c
@@ -301,7 +290,6 @@ public class TestEqualityInference
 
     @Test
     public void testConstantEqualities()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         addEquality("a1", "b1", builder);
@@ -325,7 +313,6 @@ public class TestEqualityInference
 
     @Test
     public void testEqualityGeneration()
-            throws Exception
     {
         EqualityInference.Builder builder = new EqualityInference.Builder();
         builder.addEquality(nameReference("a1"), add("b", "c")); // a1 = b + c
@@ -339,7 +326,6 @@ public class TestEqualityInference
 
     @Test
     public void testExpressionsThatMayReturnNullOnNonNullInput()
-            throws Exception
     {
         List<Expression> candidates = ImmutableList.of(
                 new Cast(nameReference("b"), "BIGINT", true), // try_cast
@@ -399,7 +385,7 @@ public class TestEqualityInference
 
     private static Expression add(Expression expression1, Expression expression2)
     {
-        return new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.ADD, expression1, expression2);
+        return new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.ADD, expression1, expression2);
     }
 
     private static Expression multiply(String symbol1, String symbol2)
@@ -409,7 +395,7 @@ public class TestEqualityInference
 
     private static Expression multiply(Expression expression1, Expression expression2)
     {
-        return new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.MULTIPLY, expression1, expression2);
+        return new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, expression1, expression2);
     }
 
     private static Expression equals(String symbol1, String symbol2)
@@ -476,7 +462,7 @@ public class TestEqualityInference
     {
         Preconditions.checkArgument(expression instanceof ComparisonExpression);
         ComparisonExpression comparisonExpression = (ComparisonExpression) expression;
-        Preconditions.checkArgument(comparisonExpression.getType() == EQUAL);
+        Preconditions.checkArgument(comparisonExpression.getOperator() == EQUAL);
         return ImmutableSet.of(comparisonExpression.getLeft(), comparisonExpression.getRight());
     }
 

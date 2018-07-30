@@ -19,6 +19,7 @@ import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.AbstractMockMetadata;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
+import com.facebook.presto.metadata.ColumnPropertyManager;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TablePropertyManager;
@@ -35,7 +36,6 @@ import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.transaction.TransactionManager;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -43,7 +43,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
-import static com.facebook.presto.spi.session.PropertyMetadata.stringSessionProperty;
+import static com.facebook.presto.spi.session.PropertyMetadata.stringProperty;
 import static com.facebook.presto.sql.QueryUtil.identifier;
 import static com.facebook.presto.testing.TestingSession.createBogusTestingCatalog;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
@@ -63,38 +63,40 @@ public class TestCreateTableTask
     private TypeManager typeManager;
     private TransactionManager transactionManager;
     private TablePropertyManager tablePropertyManager;
+    private ColumnPropertyManager columnPropertyManager;
     private Catalog testCatalog;
     private Session testSession;
     private MockMetadata metadata;
 
     @BeforeMethod
     public void setUp()
-            throws Exception
     {
         catalogManager = new CatalogManager();
         typeManager = new TypeRegistry();
         transactionManager = createTestTransactionManager(catalogManager);
         tablePropertyManager = new TablePropertyManager();
+        columnPropertyManager = new ColumnPropertyManager();
         testCatalog = createBogusTestingCatalog(CATALOG_NAME);
         catalogManager.registerCatalog(testCatalog);
         tablePropertyManager.addProperties(testCatalog.getConnectorId(),
-                ImmutableList.of(stringSessionProperty("baz", "test property", null, false)));
+                ImmutableList.of(stringProperty("baz", "test property", null, false)));
+        columnPropertyManager.addProperties(testCatalog.getConnectorId(), ImmutableList.of());
         testSession = testSessionBuilder()
                 .setTransactionId(transactionManager.beginTransaction(false))
                 .build();
         metadata = new MockMetadata(typeManager,
                 tablePropertyManager,
+                columnPropertyManager,
                 testCatalog.getConnectorId());
     }
 
     @Test
     public void testCreateTableNotExistsTrue()
-            throws Exception
     {
         CreateTable statement = new CreateTable(QualifiedName.of("test_table"),
-                ImmutableList.of(new ColumnDefinition(identifier("a"), "BIGINT", Optional.empty())),
+                ImmutableList.of(new ColumnDefinition(identifier("a"), "BIGINT", emptyList(), Optional.empty())),
                 true,
-                ImmutableMap.of(),
+                ImmutableList.of(),
                 Optional.empty());
 
         getFutureValue(new CreateTableTask().internalExecute(statement, metadata, new AllowAllAccessControl(), testSession, emptyList()));
@@ -103,12 +105,11 @@ public class TestCreateTableTask
 
     @Test
     public void testCreateTableNotExistsFalse()
-            throws Exception
     {
         CreateTable statement = new CreateTable(QualifiedName.of("test_table"),
-                ImmutableList.of(new ColumnDefinition(identifier("a"), "BIGINT", Optional.empty())),
+                ImmutableList.of(new ColumnDefinition(identifier("a"), "BIGINT", emptyList(), Optional.empty())),
                 false,
-                ImmutableMap.of(),
+                ImmutableList.of(),
                 Optional.empty());
 
         try {
@@ -119,7 +120,7 @@ public class TestCreateTableTask
             // Expected
             assertTrue(e instanceof PrestoException);
             PrestoException prestoException = (PrestoException) e;
-            assertTrue(prestoException.getErrorCode().equals(ALREADY_EXISTS.toErrorCode()));
+            assertEquals(prestoException.getErrorCode(), ALREADY_EXISTS.toErrorCode());
         }
         assertEquals(metadata.getCreateTableCallCount(), 1);
     }
@@ -129,30 +130,41 @@ public class TestCreateTableTask
     {
         private final TypeManager typeManager;
         private final TablePropertyManager tablePropertyManager;
+        private final ColumnPropertyManager columnPropertyManager;
         private final ConnectorId catalogHandle;
         private AtomicInteger createTableCallCount = new AtomicInteger();
 
         public MockMetadata(
                 TypeManager typeManager,
                 TablePropertyManager tablePropertyManager,
+                ColumnPropertyManager columnPropertyManager,
                 ConnectorId catalogHandle)
         {
             this.typeManager = requireNonNull(typeManager, "typeManager is null");
             this.tablePropertyManager = requireNonNull(tablePropertyManager, "tablePropertyManager is null");
+            this.columnPropertyManager = requireNonNull(columnPropertyManager, "columnPropertyManager is null");
             this.catalogHandle = requireNonNull(catalogHandle, "catalogHandle is null");
         }
 
         @Override
-        public void createTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata)
+        public void createTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
         {
             createTableCallCount.incrementAndGet();
-            throw new PrestoException(ALREADY_EXISTS, "Table already exists");
+            if (!ignoreExisting) {
+                throw new PrestoException(ALREADY_EXISTS, "Table already exists");
+            }
         }
 
         @Override
         public TablePropertyManager getTablePropertyManager()
         {
             return tablePropertyManager;
+        }
+
+        @Override
+        public ColumnPropertyManager getColumnPropertyManager()
+        {
+            return columnPropertyManager;
         }
 
         @Override

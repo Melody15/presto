@@ -22,16 +22,17 @@ import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.auth.InstanceProfileCredentialsProvider;
+import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
 import com.amazonaws.event.ProgressEvent;
 import com.amazonaws.event.ProgressEventType;
 import com.amazonaws.event.ProgressListener;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Builder;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.AmazonS3EncryptionClient;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
-import com.amazonaws.services.s3.model.CryptoConfiguration;
 import com.amazonaws.services.s3.model.EncryptionMaterialsProvider;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.KMSEncryptionMaterialsProvider;
@@ -44,13 +45,12 @@ import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.model.SSEAwsKeyManagementParams;
 import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.TransferManager;
-import com.amazonaws.services.s3.transfer.TransferManagerConfiguration;
+import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
-import com.facebook.presto.hadoop.HadoopFileStatus;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Throwables;
 import com.google.common.collect.AbstractSequentialIterator;
 import com.google.common.collect.Iterators;
+import com.google.common.io.Closer;
 import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
@@ -71,6 +71,7 @@ import org.apache.hadoop.util.Progressable;
 
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -78,6 +79,7 @@ import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Date;
@@ -86,14 +88,43 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.amazonaws.regions.Regions.US_EAST_1;
 import static com.amazonaws.services.s3.Headers.SERVER_SIDE_ENCRYPTION;
 import static com.amazonaws.services.s3.Headers.UNENCRYPTED_CONTENT_LENGTH;
 import static com.facebook.presto.hive.RetryDriver.retry;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_ACCESS_KEY;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_CONNECT_TIMEOUT;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_CREDENTIALS_PROVIDER;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_ENCRYPTION_MATERIALS_PROVIDER;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_ENDPOINT;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_KMS_KEY_ID;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MAX_BACKOFF_TIME;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MAX_CLIENT_RETRIES;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MAX_CONNECTIONS;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MAX_ERROR_RETRIES;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MAX_RETRY_TIME;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MULTIPART_MIN_FILE_SIZE;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MULTIPART_MIN_PART_SIZE;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_PATH_STYLE_ACCESS;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_PIN_CLIENT_TO_CURRENT_REGION;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SECRET_KEY;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SIGNER_TYPE;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SOCKET_TIMEOUT;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SSE_ENABLED;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SSE_KMS_KEY_ID;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SSE_TYPE;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SSL_ENABLED;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_STAGING_DIRECTORY;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_USER_AGENT_PREFIX;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_USER_AGENT_SUFFIX;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_USE_INSTANCE_CREDENTIALS;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
+import static com.google.common.base.Throwables.throwIfUnchecked;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.toArray;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.Math.max;
@@ -112,53 +143,18 @@ public class PrestoS3FileSystem
         extends FileSystem
 {
     private static final Logger log = Logger.get(PrestoS3FileSystem.class);
-
     private static final PrestoS3FileSystemStats STATS = new PrestoS3FileSystemStats();
     private static final PrestoS3FileSystemMetricCollector METRIC_COLLECTOR = new PrestoS3FileSystemMetricCollector(STATS);
-
-    public static PrestoS3FileSystemStats getFileSystemStats()
-    {
-        return STATS;
-    }
-
     private static final String DIRECTORY_SUFFIX = "_$folder$";
-
-    public static final String S3_ACCESS_KEY = "presto.s3.access-key";
-    public static final String S3_SECRET_KEY = "presto.s3.secret-key";
-    public static final String S3_ENDPOINT = "presto.s3.endpoint";
-    public static final String S3_SIGNER_TYPE = "presto.s3.signer-type";
-    public static final String S3_SSL_ENABLED = "presto.s3.ssl.enabled";
-    public static final String S3_MAX_ERROR_RETRIES = "presto.s3.max-error-retries";
-    public static final String S3_MAX_CLIENT_RETRIES = "presto.s3.max-client-retries";
-    public static final String S3_MAX_BACKOFF_TIME = "presto.s3.max-backoff-time";
-    public static final String S3_MAX_RETRY_TIME = "presto.s3.max-retry-time";
-    public static final String S3_CONNECT_TIMEOUT = "presto.s3.connect-timeout";
-    public static final String S3_SOCKET_TIMEOUT = "presto.s3.socket-timeout";
-    public static final String S3_MAX_CONNECTIONS = "presto.s3.max-connections";
-    public static final String S3_STAGING_DIRECTORY = "presto.s3.staging-directory";
-    public static final String S3_MULTIPART_MIN_FILE_SIZE = "presto.s3.multipart.min-file-size";
-    public static final String S3_MULTIPART_MIN_PART_SIZE = "presto.s3.multipart.min-part-size";
-    public static final String S3_USE_INSTANCE_CREDENTIALS = "presto.s3.use-instance-credentials";
-    public static final String S3_PIN_CLIENT_TO_CURRENT_REGION = "presto.s3.pin-client-to-current-region";
-    public static final String S3_ENCRYPTION_MATERIALS_PROVIDER = "presto.s3.encryption-materials-provider";
-    public static final String S3_KMS_KEY_ID = "presto.s3.kms-key-id";
-    public static final String S3_SSE_KMS_KEY_ID = "presto.s3.sse.kms-key-id";
-    public static final String S3_SSE_ENABLED = "presto.s3.sse.enabled";
-    public static final String S3_SSE_TYPE = "presto.s3.sse.type";
-    public static final String S3_CREDENTIALS_PROVIDER = "presto.s3.credentials-provider";
-    public static final String S3_USER_AGENT_PREFIX = "presto.s3.user-agent-prefix";
-    public static final String S3_USER_AGENT_SUFFIX = "presto";
-
     private static final DataSize BLOCK_SIZE = new DataSize(32, MEGABYTE);
     private static final DataSize MAX_SKIP_SIZE = new DataSize(1, MEGABYTE);
     private static final String PATH_SEPARATOR = "/";
     private static final Duration BACKOFF_MIN_SLEEP = new Duration(1, SECONDS);
 
-    private final TransferManagerConfiguration transferConfig = new TransferManagerConfiguration();
-
     private URI uri;
     private Path workingDirectory;
     private AmazonS3 s3;
+    private AWSCredentialsProvider credentialsProvider;
     private File stagingDirectory;
     private int maxAttempts;
     private Duration maxBackoffTime;
@@ -168,6 +164,9 @@ public class PrestoS3FileSystem
     private boolean sseEnabled;
     private PrestoS3SseType sseType;
     private String sseKmsKeyId;
+    private boolean isPathStyleAccess;
+    private long multiPartUploadMinFileSize;
+    private long multiPartUploadMinPartSize;
 
     @Override
     public void initialize(URI uri, Configuration conf)
@@ -191,10 +190,13 @@ public class PrestoS3FileSystem
         Duration connectTimeout = Duration.valueOf(conf.get(S3_CONNECT_TIMEOUT, defaults.getS3ConnectTimeout().toString()));
         Duration socketTimeout = Duration.valueOf(conf.get(S3_SOCKET_TIMEOUT, defaults.getS3SocketTimeout().toString()));
         int maxConnections = conf.getInt(S3_MAX_CONNECTIONS, defaults.getS3MaxConnections());
-        long minFileSize = conf.getLong(S3_MULTIPART_MIN_FILE_SIZE, defaults.getS3MultipartMinFileSize().toBytes());
-        long minPartSize = conf.getLong(S3_MULTIPART_MIN_PART_SIZE, defaults.getS3MultipartMinPartSize().toBytes());
+        this.multiPartUploadMinFileSize = conf.getLong(S3_MULTIPART_MIN_FILE_SIZE, defaults.getS3MultipartMinFileSize().toBytes());
+        this.multiPartUploadMinPartSize = conf.getLong(S3_MULTIPART_MIN_PART_SIZE, defaults.getS3MultipartMinPartSize().toBytes());
+        this.isPathStyleAccess = conf.getBoolean(S3_PATH_STYLE_ACCESS, defaults.isS3PathStyleAccess());
         this.useInstanceCredentials = conf.getBoolean(S3_USE_INSTANCE_CREDENTIALS, defaults.isS3UseInstanceCredentials());
         this.pinS3ClientToCurrentRegion = conf.getBoolean(S3_PIN_CLIENT_TO_CURRENT_REGION, defaults.isPinS3ClientToCurrentRegion());
+        verify((pinS3ClientToCurrentRegion && conf.get(S3_ENDPOINT) == null) || !pinS3ClientToCurrentRegion,
+                "Invalid configuration: either endpoint can be set or S3 client can be pinned to the current region");
         this.sseEnabled = conf.getBoolean(S3_SSE_ENABLED, defaults.isS3SseEnabled());
         this.sseType = PrestoS3SseType.valueOf(conf.get(S3_SSE_TYPE, defaults.getS3SseType().name()));
         this.sseKmsKeyId = conf.get(S3_SSE_KMS_KEY_ID, defaults.getS3SseKmsKeyId());
@@ -209,21 +211,20 @@ public class PrestoS3FileSystem
                 .withUserAgentPrefix(userAgentPrefix)
                 .withUserAgentSuffix(S3_USER_AGENT_SUFFIX);
 
-        this.s3 = createAmazonS3Client(uri, conf, configuration);
-
-        transferConfig.setMultipartUploadThreshold(minFileSize);
-        transferConfig.setMinimumUploadPartSize(minPartSize);
+        this.credentialsProvider = createAwsCredentialsProvider(uri, conf);
+        this.s3 = createAmazonS3Client(conf, configuration);
     }
 
     @Override
     public void close()
             throws IOException
     {
-        try {
-            super.close();
-        }
-        finally {
-            s3.shutdown();
+        try (Closer closer = Closer.create()) {
+            closer.register(super::close);
+            if (credentialsProvider instanceof Closeable) {
+                closer.register((Closeable) credentialsProvider);
+            }
+            closer.register(s3::shutdown);
         }
     }
 
@@ -337,11 +338,10 @@ public class PrestoS3FileSystem
 
     @Override
     public FSDataInputStream open(Path path, int bufferSize)
-            throws IOException
     {
         return new FSDataInputStream(
                 new BufferedFSInputStream(
-                        new PrestoS3InputStream(s3, uri.getHost(), path, maxAttempts, maxBackoffTime, maxRetryTime),
+                        new PrestoS3InputStream(s3, getBucketName(uri), path, maxAttempts, maxBackoffTime, maxRetryTime),
                         bufferSize));
     }
 
@@ -363,7 +363,7 @@ public class PrestoS3FileSystem
 
         String key = keyFromPath(qualifiedPath(path));
         return new FSDataOutputStream(
-                new PrestoS3OutputStream(s3, transferConfig, uri.getHost(), key, tempFile, sseEnabled, sseType, sseKmsKeyId),
+                new PrestoS3OutputStream(s3, getBucketName(uri), key, tempFile, sseEnabled, sseType, sseKmsKeyId, multiPartUploadMinFileSize, multiPartUploadMinPartSize),
                 statistics);
     }
 
@@ -388,7 +388,7 @@ public class PrestoS3FileSystem
         try {
             if (!directory(dst)) {
                 // cannot copy a file to an existing file
-                return keysEqual(src, dst);
+                return false;
             }
             // move source under destination directory
             dst = new Path(dst, src.getName());
@@ -398,7 +398,7 @@ public class PrestoS3FileSystem
         }
 
         if (keysEqual(src, dst)) {
-            return true;
+            return false;
         }
 
         if (srcDirectory) {
@@ -408,7 +408,7 @@ public class PrestoS3FileSystem
             deleteObject(keyFromPath(src) + DIRECTORY_SUFFIX);
         }
         else {
-            s3.copyObject(uri.getHost(), keyFromPath(src), uri.getHost(), keyFromPath(dst));
+            s3.copyObject(getBucketName(uri), keyFromPath(src), getBucketName(uri), keyFromPath(dst));
             delete(src, true);
         }
 
@@ -443,13 +443,13 @@ public class PrestoS3FileSystem
     private boolean directory(Path path)
             throws IOException
     {
-        return HadoopFileStatus.isDirectory(getFileStatus(path));
+        return getFileStatus(path).isDirectory();
     }
 
     private boolean deleteObject(String key)
     {
         try {
-            s3.deleteObject(uri.getHost(), key);
+            s3.deleteObject(getBucketName(uri), key);
             return true;
         }
         catch (AmazonClientException e) {
@@ -472,7 +472,7 @@ public class PrestoS3FileSystem
         }
 
         ListObjectsRequest request = new ListObjectsRequest()
-                .withBucketName(uri.getHost())
+                .withBucketName(getBucketName(uri))
                 .withPrefix(key)
                 .withDelimiter(PATH_SEPARATOR);
 
@@ -556,7 +556,7 @@ public class PrestoS3FileSystem
                     .run("getS3ObjectMetadata", () -> {
                         try {
                             STATS.newMetadataCall();
-                            return s3.getObjectMetadata(uri.getHost(), keyFromPath(path));
+                            return s3.getObjectMetadata(getBucketName(uri), keyFromPath(path));
                         }
                         catch (RuntimeException e) {
                             STATS.newGetMetadataError();
@@ -569,17 +569,18 @@ public class PrestoS3FileSystem
                                         throw new UnrecoverableS3OperationException(path, e);
                                 }
                             }
-                            throw Throwables.propagate(e);
+                            throw e;
                         }
                     });
         }
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
         catch (Exception e) {
             throwIfInstanceOf(e, IOException.class);
-            throw Throwables.propagate(e);
+            throwIfUnchecked(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -595,7 +596,7 @@ public class PrestoS3FileSystem
             return new LocatedFileStatus(status, fakeLocation);
         }
         catch (IOException e) {
-            throw Throwables.propagate(e);
+            throw new UncheckedIOException(e);
         }
     }
 
@@ -623,36 +624,57 @@ public class PrestoS3FileSystem
         return key;
     }
 
-    private AmazonS3Client createAmazonS3Client(URI uri, Configuration hadoopConfig, ClientConfiguration clientConfig)
+    private AmazonS3 createAmazonS3Client(Configuration hadoopConfig, ClientConfiguration clientConfig)
     {
-        AWSCredentialsProvider credentials = getAwsCredentialsProvider(uri, hadoopConfig);
-        Optional<EncryptionMaterialsProvider> emp = createEncryptionMaterialsProvider(hadoopConfig);
-        AmazonS3Client client;
+        Optional<EncryptionMaterialsProvider> encryptionMaterialsProvider = createEncryptionMaterialsProvider(hadoopConfig);
+        AmazonS3Builder<? extends AmazonS3Builder, ? extends AmazonS3> clientBuilder;
+
         String signerType = hadoopConfig.get(S3_SIGNER_TYPE);
         if (signerType != null) {
             clientConfig.withSignerOverride(signerType);
         }
-        if (emp.isPresent()) {
-            client = new AmazonS3EncryptionClient(credentials, emp.get(), clientConfig, new CryptoConfiguration(), METRIC_COLLECTOR);
+
+        if (encryptionMaterialsProvider.isPresent()) {
+            clientBuilder = AmazonS3EncryptionClient.encryptionBuilder()
+                    .withCredentials(credentialsProvider)
+                    .withEncryptionMaterials(encryptionMaterialsProvider.get())
+                    .withClientConfiguration(clientConfig)
+                    .withMetricsCollector(METRIC_COLLECTOR);
         }
         else {
-            client = new AmazonS3Client(credentials, clientConfig, METRIC_COLLECTOR);
+            clientBuilder = AmazonS3Client.builder()
+                    .withCredentials(credentialsProvider)
+                    .withClientConfiguration(clientConfig)
+                    .withMetricsCollector(METRIC_COLLECTOR);
         }
+
+        boolean regionOrEndpointSet = false;
 
         // use local region when running inside of EC2
         if (pinS3ClientToCurrentRegion) {
             Region region = Regions.getCurrentRegion();
             if (region != null) {
-                client.setRegion(region);
+                clientBuilder = clientBuilder.withRegion(region.getName());
+                regionOrEndpointSet = true;
             }
         }
 
         String endpoint = hadoopConfig.get(S3_ENDPOINT);
         if (endpoint != null) {
-            client.setEndpoint(endpoint);
+            clientBuilder = clientBuilder.withEndpointConfiguration(new EndpointConfiguration(endpoint, null));
+            regionOrEndpointSet = true;
         }
 
-        return client;
+        if (isPathStyleAccess) {
+            clientBuilder = clientBuilder.enablePathStyleAccess();
+        }
+
+        if (!regionOrEndpointSet) {
+            clientBuilder = clientBuilder.withRegion(US_EAST_1);
+            clientBuilder.setForceGlobalBucketAccessEnabled(true);
+        }
+
+        return clientBuilder.build();
     }
 
     private static Optional<EncryptionMaterialsProvider> createEncryptionMaterialsProvider(Configuration hadoopConfig)
@@ -683,7 +705,7 @@ public class PrestoS3FileSystem
         }
     }
 
-    private AWSCredentialsProvider getAwsCredentialsProvider(URI uri, Configuration conf)
+    private AWSCredentialsProvider createAwsCredentialsProvider(URI uri, Configuration conf)
     {
         Optional<AWSCredentials> credentials = getAwsCredentials(uri, conf);
         if (credentials.isPresent()) {
@@ -691,7 +713,7 @@ public class PrestoS3FileSystem
         }
 
         if (useInstanceCredentials) {
-            return new InstanceProfileCredentialsProvider();
+            return InstanceProfileCredentialsProvider.getInstance();
         }
 
         String providerClass = conf.get(S3_CREDENTIALS_PROVIDER);
@@ -826,11 +848,12 @@ public class PrestoS3FileSystem
             }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
             catch (Exception e) {
                 throwIfInstanceOf(e, IOException.class);
-                throw Throwables.propagate(e);
+                throwIfUnchecked(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -892,7 +915,7 @@ public class PrestoS3FileSystem
                         .onRetry(STATS::newGetObjectRetry)
                         .run("getS3Object", () -> {
                             try {
-                                GetObjectRequest request = new GetObjectRequest(host, keyFromPath(path)).withRange(start, Long.MAX_VALUE);
+                                GetObjectRequest request = new GetObjectRequest(host, keyFromPath(path)).withRange(start);
                                 return s3.getObject(request).getObjectContent();
                             }
                             catch (RuntimeException e) {
@@ -908,17 +931,18 @@ public class PrestoS3FileSystem
                                             throw new UnrecoverableS3OperationException(path, e);
                                     }
                                 }
-                                throw Throwables.propagate(e);
+                                throw e;
                             }
                         });
             }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
             catch (Exception e) {
                 throwIfInstanceOf(e, IOException.class);
-                throw Throwables.propagate(e);
+                throwIfUnchecked(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -955,13 +979,24 @@ public class PrestoS3FileSystem
 
         private boolean closed;
 
-        public PrestoS3OutputStream(AmazonS3 s3, TransferManagerConfiguration config, String host, String key, File tempFile, boolean sseEnabled, PrestoS3SseType sseType, String sseKmsKeyId)
+        public PrestoS3OutputStream(
+                AmazonS3 s3,
+                String host,
+                String key,
+                File tempFile,
+                boolean sseEnabled,
+                PrestoS3SseType sseType,
+                String sseKmsKeyId,
+                long multiPartUploadMinFileSize,
+                long multiPartUploadMinPartSize)
                 throws IOException
         {
             super(new BufferedOutputStream(new FileOutputStream(requireNonNull(tempFile, "tempFile is null"))));
 
-            transferManager = new TransferManager(requireNonNull(s3, "s3 is null"));
-            transferManager.setConfiguration(requireNonNull(config, "config is null"));
+            transferManager = TransferManagerBuilder.standard()
+                    .withS3Client(requireNonNull(s3, "s3 is null"))
+                    .withMinimumUploadPartSize(multiPartUploadMinPartSize)
+                    .withMultipartUploadThreshold(multiPartUploadMinFileSize).build();
 
             this.host = requireNonNull(host, "host is null");
             this.key = requireNonNull(key, "key is null");
@@ -1078,5 +1113,32 @@ public class PrestoS3FileSystem
     void setS3Client(AmazonS3 client)
     {
         s3 = client;
+    }
+
+    /**
+     * Helper function used to work around the fact that if you use an S3 bucket with an '_' that java.net.URI
+     * behaves differently and sets the host value to null whereas S3 buckets without '_' have a properly
+     * set host field. '_' is only allowed in S3 bucket names in us-east-1.
+     *
+     * @param uri The URI from which to extract a host value.
+     * @return The host value where uri.getAuthority() is used when uri.getHost() returns null as long as no UserInfo is present.
+     * @throws IllegalArgumentException If the bucket can not be determined from the URI.
+     */
+    public static String getBucketName(URI uri)
+    {
+        if (uri.getHost() != null) {
+            return uri.getHost();
+        }
+
+        if (uri.getUserInfo() == null) {
+            return uri.getAuthority();
+        }
+
+        throw new IllegalArgumentException("Unable to determine S3 bucket from URI.");
+    }
+
+    public static PrestoS3FileSystemStats getFileSystemStats()
+    {
+        return STATS;
     }
 }

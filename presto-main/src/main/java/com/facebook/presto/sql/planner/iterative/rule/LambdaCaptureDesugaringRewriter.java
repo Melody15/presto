@@ -14,10 +14,9 @@
 
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.ExpressionSymbolInliner;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.tree.BindExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionRewriter;
@@ -31,15 +30,16 @@ import com.google.common.collect.ImmutableMap;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
+import static com.facebook.presto.sql.planner.ExpressionSymbolInliner.inlineSymbols;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
 public class LambdaCaptureDesugaringRewriter
 {
-    public static Expression rewrite(Expression expression, Map<Symbol, Type> symbolTypes, SymbolAllocator symbolAllocator)
+    public static Expression rewrite(Expression expression, TypeProvider symbolTypes, SymbolAllocator symbolAllocator)
     {
         return ExpressionTreeRewriter.rewriteWith(new Visitor(symbolTypes, symbolAllocator), expression, new Context());
     }
@@ -49,10 +49,10 @@ public class LambdaCaptureDesugaringRewriter
     private static class Visitor
             extends ExpressionRewriter<Context>
     {
-        private final Map<Symbol, Type> symbolTypes;
+        private final TypeProvider symbolTypes;
         private final SymbolAllocator symbolAllocator;
 
-        public Visitor(Map<Symbol, Type> symbolTypes, SymbolAllocator symbolAllocator)
+        public Visitor(TypeProvider symbolTypes, SymbolAllocator symbolAllocator)
         {
             this.symbolTypes = requireNonNull(symbolTypes, "symbolTypes is null");
             this.symbolAllocator = requireNonNull(symbolAllocator, "symbolAllocator is null");
@@ -89,8 +89,8 @@ public class LambdaCaptureDesugaringRewriter
             newLambdaArguments.addAll(node.getArguments());
 
             ImmutableMap<Symbol, Symbol> symbolsMap = captureSymbolToExtraSymbol.build();
-            ExpressionSymbolInliner inliner = new ExpressionSymbolInliner(x -> symbolsMap.getOrDefault(x, x).toSymbolReference());
-            Expression rewrittenExpression = new LambdaExpression(newLambdaArguments.build(), inliner.rewrite(rewrittenBody));
+            Function<Symbol, Expression> symbolMapping = symbol -> symbolsMap.getOrDefault(symbol, symbol).toSymbolReference();
+            Expression rewrittenExpression = new LambdaExpression(newLambdaArguments.build(), inlineSymbols(symbolMapping, rewrittenBody));
 
             if (captureSymbols.size() != 0) {
                 List<Expression> capturedValues = captureSymbols.stream()

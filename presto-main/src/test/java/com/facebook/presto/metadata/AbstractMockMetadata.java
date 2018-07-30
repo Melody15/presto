@@ -17,11 +17,10 @@ import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.spi.CatalogSchemaName;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.ColumnIdentity;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
-import com.facebook.presto.spi.TableIdentity;
+import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.predicate.TupleDomain;
@@ -44,6 +43,11 @@ import java.util.Set;
 public abstract class AbstractMockMetadata
         implements Metadata
 {
+    public static Metadata dummyMetadata()
+    {
+        return new AbstractMockMetadata() {};
+    }
+
     @Override
     public void verifyComparableOrderableContract()
     {
@@ -88,6 +92,12 @@ public abstract class AbstractMockMetadata
 
     @Override
     public Optional<TableHandle> getTableHandle(Session session, QualifiedObjectName tableName)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<SystemTable> getSystemTable(Session session, QualifiedObjectName tableName)
     {
         throw new UnsupportedOperationException();
     }
@@ -165,7 +175,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public void createTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata)
+    public void createTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
     {
         throw new UnsupportedOperationException();
     }
@@ -190,30 +200,6 @@ public abstract class AbstractMockMetadata
 
     @Override
     public void dropTable(Session session, TableHandle tableHandle)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public TableIdentity getTableIdentity(Session session, TableHandle tableHandle)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public TableIdentity deserializeTableIdentity(Session session, String catalogName, byte[] bytes)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public ColumnIdentity getColumnIdentity(Session session, TableHandle tableHandle, ColumnHandle columnHandle)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public ColumnIdentity deserializeColumnIdentity(Session session, String catalogName, byte[] bytes)
     {
         throw new UnsupportedOperationException();
     }
@@ -400,6 +386,24 @@ public abstract class AbstractMockMetadata
 
     @Override
     public TablePropertyManager getTablePropertyManager()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ColumnPropertyManager getColumnPropertyManager()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void dropColumn(Session session, TableHandle tableHandle, ColumnHandle column)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean catalogExists(Session session, String catalogName)
     {
         throw new UnsupportedOperationException();
     }

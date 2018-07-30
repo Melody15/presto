@@ -15,10 +15,9 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
@@ -27,8 +26,6 @@ import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static com.facebook.presto.sql.planner.plan.SimplePlanRewriter.rewriteWith;
@@ -57,7 +54,7 @@ public class TransformCorrelatedSingleRowSubqueryToProject
     public PlanNode optimize(
             PlanNode plan,
             Session session,
-            Map<Symbol, Type> types,
+            TypeProvider types,
             SymbolAllocator symbolAllocator,
             PlanNodeIdAllocator idAllocator)
     {
@@ -82,12 +79,12 @@ public class TransformCorrelatedSingleRowSubqueryToProject
                 return rewrittenLateral;
             }
 
-            Optional<ValuesNode> values = searchFrom(lateral.getSubquery())
+            List<ValuesNode> values = searchFrom(lateral.getSubquery())
                     .recurseOnlyWhen(ProjectNode.class::isInstance)
                     .where(ValuesNode.class::isInstance)
-                    .findSingle();
+                    .findAll();
 
-            if (!values.isPresent() || !isSingleRowValuesWithNoColumns(values.get())) {
+            if (values.size() != 1 || !isSingleRowValuesWithNoColumns(values.get(0))) {
                 return rewrittenLateral;
             }
 

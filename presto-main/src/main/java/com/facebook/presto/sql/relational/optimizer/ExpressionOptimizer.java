@@ -38,6 +38,7 @@ import static com.facebook.presto.metadata.Signature.internalScalarFunction;
 import static com.facebook.presto.operator.scalar.JsonStringToArrayCast.JSON_STRING_TO_ARRAY_NAME;
 import static com.facebook.presto.operator.scalar.JsonStringToMapCast.JSON_STRING_TO_MAP_NAME;
 import static com.facebook.presto.operator.scalar.JsonStringToRowCast.JSON_STRING_TO_ROW_NAME;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.spi.type.StandardTypes.MAP;
@@ -181,7 +182,7 @@ public class ExpressionOptimizer
                 for (RowExpression argument : arguments) {
                     Object value = ((ConstantExpression) argument).getValue();
                     // if any argument is null, return null
-                    if (value == null && !function.getNullableArguments().get(index)) {
+                    if (value == null && function.getArgumentProperty(index).getNullConvention() == RETURN_NULL_ON_NULL) {
                         return constantNull(call.getType());
                     }
                     constantArguments.add(value);
@@ -232,7 +233,7 @@ public class ExpressionOptimizer
                                 call.getType(),
                                 innerCall.getArguments());
                     }
-                    else if (returnType.getBase().equals(MAP)) {
+                    if (returnType.getBase().equals(MAP)) {
                         return call(
                                 internalScalarFunction(
                                         JSON_STRING_TO_MAP_NAME,
@@ -241,7 +242,7 @@ public class ExpressionOptimizer
                                 call.getType(),
                                 innerCall.getArguments());
                     }
-                    else if (returnType.getBase().equals(ROW)) {
+                    if (returnType.getBase().equals(ROW)) {
                         return call(
                                 internalScalarFunction(
                                         JSON_STRING_TO_ROW_NAME,

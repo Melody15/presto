@@ -14,12 +14,15 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.RowPagesBuilder;
+import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.google.common.collect.ImmutableList;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import static com.facebook.presto.operator.SyntheticAddress.encodeSyntheticAddress;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -310,8 +313,10 @@ public class TestPositionLinks
                 ImmutableList.of(),
                 ImmutableList.of(ImmutableList.of(TEST_PAGE.getBlock(0))),
                 ImmutableList.of(),
-                Optional.empty(),
-                Optional.of(0));
+                OptionalInt.empty(),
+                Optional.of(0),
+                MetadataManager.createTestMetadataManager().getFunctionRegistry(),
+                new FeaturesConfig().isGroupByUsesEqualTo());
     }
 
     private static LongArrayList addresses()

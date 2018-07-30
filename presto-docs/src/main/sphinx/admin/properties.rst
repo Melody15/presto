@@ -13,19 +13,27 @@ may be used to tune Presto or alter its behavior when required.
 General Properties
 ------------------
 
-``distributed-joins-enabled``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+``join-distribution-type``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    * **Type:** ``boolean``
-    * **Default value:** ``true``
+    * **Type:** ``string``
+    * **Allowed values:** ``AUTOMATIC``, ``REPARTITIONED``, ``BROADCAST``
+    * **Default value:** ``REPARTITIONED``
 
-    Use hash distributed joins instead of broadcast joins. Distributed joins
-    require redistributing both tables using a hash of the join key. This can
-    be slower (sometimes substantially) than broadcast joins, but allows much
-    larger joins. Broadcast joins require that the tables on the right side of
-    the join after filtering fit in memory on each node, whereas distributed joins
-    only need to fit in distributed memory across all nodes. This can also be
-    specified on a per-query basis using the ``distributed_join`` session property.
+    The type of distributed join to use.  When set to ``REPARTITIONED``, presto will
+    use hash distributed joins.  When set to ``BROADCAST``, it will broadcast the
+    right table to all nodes in the cluster that have data from the left table.
+    Repartitioned joins require redistributing both tables using a hash of the join key.
+    This can be slower (sometimes substantially) than broadcast joins, but allows much
+    larger joins. In particular broadcast joins will be faster if the right table is
+    much smaller than the left.  However, broadcast joins require that the tables on the right
+    side of the join after filtering fit in memory on each node, whereas distributed joins
+    only need to fit in distributed memory across all nodes. When set to ``AUTOMATIC``,
+    Presto will make a cost based decision as to which distribution type is optimal.
+    It will also consider switching the left and right inputs to the join.  In ``AUTOMATIC``
+    mode, Presto will default to hash distributed joins if no cost could be computed, such as if
+    the tables do not have statistics. This can also be specified on a per-query basis using
+    the ``join_distribution_type`` session property.
 
 ``redistribute-writes``
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -56,6 +64,85 @@ General Properties
     clusters with many concurrent queries. If running fewer queries with a
     large heap, a smaller value may work. Basically, set this value large
     enough that the JVM does not fail with ``OutOfMemoryError``.
+
+
+.. _tuning-spilling:
+
+Spilling Properties
+-------------------
+
+``experimental.spill-enabled``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``boolean``
+    * **Default value:** ``false``
+
+    Try spilling memory to disk to avoid exceeding memory limits for the query.
+
+    Spilling works by offloading memory to disk. This process can allow a query with a large memory
+    footprint to pass at the cost of slower execution times. Currently, spilling is supported only for
+    aggregations and joins (inner and outer), so this property will not reduce memory usage required for
+    window functions, sorting and other join types.
+
+    Be aware that this is an experimental feature and should be used with care.
+
+    This config property can be overridden by the ``spill_enabled`` session property.
+
+``experimental.spiller-spill-path``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **No default value.** Must be set when spilling is enabled
+
+    Directory where spilled content will be written. It can be a comma separated
+    list to spill simultaneously to multiple directories, which helps to utilize
+    multiple drives installed in the system.
+
+    It is not recommended to spill to system drives. Most importantly, do not spill
+    to the drive on which the JVM logs are written, as disk overutilization might
+    cause JVM to pause for lengthy periods, causing queries to fail.
+
+``experimental.spiller-max-used-space-threshold``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``double``
+    * **Default value:** ``0.9``
+
+    If disk space usage ratio of a given spill path is above this threshold,
+    this spill path will not be eligible for spilling.
+
+``experimental.spiller-threads``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``integer``
+    * **Default value:** ``4``
+
+    Number of spiller threads. Increase this value if the default is not able
+    to saturate the underlying spilling device (for example, when using RAID).
+
+``experimental.max-spill-per-node``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``data size``
+    * **Default value:** ``100 GB``
+
+    Max spill space to be used by all queries on a single node.
+
+``experimental.query-max-spill-per-node``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``data size``
+    * **Default value:** ``100 GB``
+
+    Max spill space to be used by a single query on a single node.
+
+``experimental.aggregation-operator-unspill-memory-limit``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``data size``
+    * **Default value:** ``4 MB``
+
+    Limit for memory used for unspilling a single aggregation operator instance.
 
 
 Exchange Properties
@@ -134,6 +221,7 @@ communication issues or improve network utilization.
     improve network throughput for data transferred between stages if the
     network has high latency or if there are many nodes in the cluster.
 
+.. _task-properties:
 
 Task Properties
 ---------------
@@ -388,6 +476,33 @@ Optimizer Properties
     in an already heavily loaded system. This can also be specified on a per-query basis
     using the ``push_table_write_through_union`` session property.
 
+
+``optimizer.join-reordering-strategy``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **Allowed values:** ``COST_BASED``, ``ELIMINATE_CROSS_JOINS``, ``NONE``
+    * **Default value:** ``ELIMINATE_CROSS_JOINS``
+
+    The join reordering strategy to use.  ``NONE`` maintains the order the tables are listed in the
+    query.  ``ELIMINATE_CROSS_JOINS`` reorders joins to eliminate cross joins where possible and
+    otherwise maintains the original query order. When reordering joins it also strives to maintain the
+    original table order as much as possible. ``COST_BASED`` enumerates possible orders and uses
+    statistics-based cost estimation to determine the least cost order. If stats are not available or if
+    for any reason a cost could not be computed, the ``ELIMINATE_CROSS_JOINS`` strategy is used. This can
+    also be specified on a per-query basis using the ``join_reordering_strategy`` session property.
+
+``optimizer.max-reordered-joins``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``integer``
+    * **Default value:** ``9``
+
+    When optimizer.join-reordering-strategy is set to cost-based, this property determines the maximum
+    number of joins that can be reordered at once.
+
+    .. warning:: The number of possible join orders scales factorially with the number of relations,
+                 so increasing this value can cause serious performance issues.
 
 Regular Expression Function Properties
 --------------------------------------

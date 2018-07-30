@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
+import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.sql.planner.OrderingScheme;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.plan.Assignments;
@@ -20,19 +22,24 @@ import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.exchange;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.sort;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
+import static com.facebook.presto.sql.tree.SortItem.NullOrdering.FIRST;
+import static com.facebook.presto.sql.tree.SortItem.Ordering.ASCENDING;
 
 public class TestPushProjectionThroughExchange
         extends BaseRuleTest
 {
     @Test
     public void testDoesNotFireNoExchange()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p ->
@@ -44,7 +51,6 @@ public class TestPushProjectionThroughExchange
 
     @Test
     public void testDoesNotFireNarrowingProjection()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
@@ -67,7 +73,6 @@ public class TestPushProjectionThroughExchange
 
     @Test
     public void testSimpleMultipleInputs()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
@@ -104,7 +109,6 @@ public class TestPushProjectionThroughExchange
 
     @Test
     public void testPartitioningColumnAndHashWithoutIdentityMappingInProjection()
-            throws Exception
     {
         tester().assertThat(new PushProjectionThroughExchange())
                 .on(p -> {
@@ -116,9 +120,9 @@ public class TestPushProjectionThroughExchange
                     Symbol hTimes5 = p.symbol("h_times_5");
                     return p.project(
                             Assignments.builder()
-                                    .put(aTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.MULTIPLY, new SymbolReference("a"), new LongLiteral("5")))
-                                    .put(bTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.MULTIPLY, new SymbolReference("b"), new LongLiteral("5")))
-                                    .put(hTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Type.MULTIPLY, new SymbolReference("h"), new LongLiteral("5")))
+                                    .put(aTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("a"), new LongLiteral("5")))
+                                    .put(bTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("b"), new LongLiteral("5")))
+                                    .put(hTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("h"), new LongLiteral("5")))
                                     .build(),
                             p.exchange(e -> e
                                     .addSource(
@@ -141,6 +145,48 @@ public class TestPushProjectionThroughExchange
                                                 .withAlias("a_times_5", expression("a * 5"))
                                                 .withAlias("b_times_5", expression("b * 5"))
                                                 .withAlias("h_times_5", expression("h * 5")))
+                        ).withNumberOfOutputColumns(3)
+                                .withExactOutputs("a_times_5", "b_times_5", "h_times_5"));
+    }
+
+    @Test
+    public void testOrderingColumnsArePreserved()
+    {
+        tester().assertThat(new PushProjectionThroughExchange())
+                .on(p -> {
+                    Symbol a = p.symbol("a");
+                    Symbol b = p.symbol("b");
+                    Symbol h = p.symbol("h");
+                    Symbol aTimes5 = p.symbol("a_times_5");
+                    Symbol bTimes5 = p.symbol("b_times_5");
+                    Symbol hTimes5 = p.symbol("h_times_5");
+                    Symbol sortSymbol = p.symbol("sortSymbol");
+                    OrderingScheme orderingScheme = new OrderingScheme(ImmutableList.of(sortSymbol), ImmutableMap.of(sortSymbol, SortOrder.ASC_NULLS_FIRST));
+                    return p.project(
+                            Assignments.builder()
+                                    .put(aTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("a"), new LongLiteral("5")))
+                                    .put(bTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("b"), new LongLiteral("5")))
+                                    .put(hTimes5, new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.MULTIPLY, new SymbolReference("h"), new LongLiteral("5")))
+                                    .build(),
+                            p.exchange(e -> e
+                                    .addSource(
+                                            p.values(a, b, h, sortSymbol))
+                                    .addInputsSet(a, b, h, sortSymbol)
+                                    .singleDistributionPartitioningScheme(
+                                            ImmutableList.of(a, b, h, sortSymbol))
+                                    .orderingScheme(orderingScheme)));
+                })
+                .matches(
+                        project(
+                                exchange(REMOTE, GATHER, ImmutableList.of(sort("sortSymbol", ASCENDING, FIRST)),
+                                        project(
+                                                values(
+                                                        ImmutableList.of("a", "b", "h", "sortSymbol")))
+                                                .withNumberOfOutputColumns(4)
+                                                .withAlias("a_times_5", expression("a * 5"))
+                                                .withAlias("b_times_5", expression("b * 5"))
+                                                .withAlias("h_times_5", expression("h * 5"))
+                                                .withAlias("sortSymbol", expression("sortSymbol")))
                         ).withNumberOfOutputColumns(3)
                                 .withExactOutputs("a_times_5", "b_times_5", "h_times_5"));
     }

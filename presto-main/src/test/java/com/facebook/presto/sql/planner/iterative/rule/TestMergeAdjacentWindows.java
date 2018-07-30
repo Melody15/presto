@@ -48,8 +48,15 @@ import static com.facebook.presto.sql.tree.FrameBound.Type.UNBOUNDED_PRECEDING;
 public class TestMergeAdjacentWindows
         extends BaseRuleTest
 {
-    private static final WindowNode.Frame frame = new WindowNode.Frame(WindowFrame.Type.RANGE, UNBOUNDED_PRECEDING,
-            Optional.empty(), CURRENT_ROW, Optional.empty());
+    private static final WindowNode.Frame frame = new WindowNode.Frame(
+            WindowFrame.Type.RANGE,
+            UNBOUNDED_PRECEDING,
+            Optional.empty(),
+            CURRENT_ROW,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
+
     private static final Signature signature = new Signature(
             "avg",
             FunctionKind.WINDOW,
@@ -66,7 +73,6 @@ public class TestMergeAdjacentWindows
 
     @Test
     public void testPlanWithoutWindowNode()
-            throws Exception
     {
         tester().assertThat(new GatherAndMergeWindows.MergeAdjacentWindowsOverProjects(0))
                 .on(p -> p.values(p.symbol("a")))
@@ -75,7 +81,6 @@ public class TestMergeAdjacentWindows
 
     @Test
     public void testPlanWithSingleWindowNode()
-            throws Exception
     {
         tester().assertThat(new GatherAndMergeWindows.MergeAdjacentWindowsOverProjects(0))
                 .on(p ->
@@ -120,7 +125,6 @@ public class TestMergeAdjacentWindows
 
     @Test
     public void testDependentAdjacentWindowsIdenticalSpecifications()
-            throws Exception
     {
         tester().assertThat(new GatherAndMergeWindows.MergeAdjacentWindowsOverProjects(0))
                 .on(p ->
@@ -136,7 +140,6 @@ public class TestMergeAdjacentWindows
 
     @Test
     public void testDependentAdjacentWindowsDistinctSpecifications()
-            throws Exception
     {
         tester().assertThat(new GatherAndMergeWindows.MergeAdjacentWindowsOverProjects(0))
                 .on(p ->
@@ -152,7 +155,6 @@ public class TestMergeAdjacentWindows
 
     @Test
     public void testIdenticalAdjacentWindowSpecifications()
-            throws Exception
     {
         tester().assertThat(new GatherAndMergeWindows.MergeAdjacentWindowsOverProjects(0))
                 .on(p ->
@@ -220,7 +222,7 @@ public class TestMergeAdjacentWindows
 
     private static WindowNode.Specification newWindowNodeSpecification(PlanBuilder planBuilder, String symbolName)
     {
-        return new WindowNode.Specification(ImmutableList.of(planBuilder.symbol(symbolName, BIGINT)), ImmutableList.of(), ImmutableMap.of());
+        return new WindowNode.Specification(ImmutableList.of(planBuilder.symbol(symbolName, BIGINT)), Optional.empty());
     }
 
     private WindowNode.Function newWindowNodeFunction(String functionName, String... symbols)

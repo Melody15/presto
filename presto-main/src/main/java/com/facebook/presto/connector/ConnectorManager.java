@@ -14,7 +14,11 @@
 package com.facebook.presto.connector;
 
 import com.facebook.presto.connector.informationSchema.InformationSchemaConnector;
+import com.facebook.presto.connector.system.DelegatingSystemTablesProvider;
+import com.facebook.presto.connector.system.MetadataBasedSystemTablesProvider;
+import com.facebook.presto.connector.system.StaticSystemTablesProvider;
 import com.facebook.presto.connector.system.SystemConnector;
+import com.facebook.presto.connector.system.SystemTablesProvider;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
@@ -35,14 +39,12 @@ import com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.connector.ConnectorRecordSetProvider;
-import com.facebook.presto.spi.connector.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
 import com.facebook.presto.spi.procedure.Procedure;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.split.PageSinkManager;
 import com.facebook.presto.split.PageSourceManager;
-import com.facebook.presto.split.RecordPageSinkProvider;
 import com.facebook.presto.split.RecordPageSourceProvider;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
@@ -197,10 +199,21 @@ public class ConnectorManager
                 new InformationSchemaConnector(catalogName, nodeManager, metadataManager, accessControlManager));
 
         ConnectorId systemId = createSystemTablesConnectorId(connectorId);
+        SystemTablesProvider systemTablesProvider;
+
+        if (nodeManager.getCurrentNode().isCoordinator()) {
+            systemTablesProvider = new DelegatingSystemTablesProvider(
+                    new StaticSystemTablesProvider(connector.getSystemTables()),
+                    new MetadataBasedSystemTablesProvider(metadataManager, catalogName));
+        }
+        else {
+            systemTablesProvider = new StaticSystemTablesProvider(connector.getSystemTables());
+        }
+
         MaterializedConnector systemConnector = new MaterializedConnector(systemId, new SystemConnector(
                 systemId,
                 nodeManager,
-                connector.getSystemTables(),
+                systemTablesProvider,
                 transactionId -> transactionManager.getConnectorTransaction(transactionId, connectorId)));
 
         Catalog catalog = new Catalog(
@@ -252,6 +265,7 @@ public class ConnectorManager
                 .ifPresent(accessControl -> accessControlManager.addCatalogAccessControl(connectorId, accessControl));
 
         metadataManager.getTablePropertyManager().addProperties(connectorId, connector.getTableProperties());
+        metadataManager.getColumnPropertyManager().addProperties(connectorId, connector.getColumnProperties());
         metadataManager.getSchemaPropertyManager().addProperties(connectorId, connector.getSchemaProperties());
         metadataManager.getSessionPropertyManager().addConnectorSessionProperties(connectorId, connector.getSessionProperties());
     }
@@ -281,8 +295,9 @@ public class ConnectorManager
         metadataManager.getSchemaPropertyManager().removeProperties(connectorId);
         metadataManager.getSessionPropertyManager().removeConnectorSessionProperties(connectorId);
 
-        Connector connector = connectors.remove(connectorId).getConnector();
-        if (connector != null) {
+        MaterializedConnector materializedConnector = connectors.remove(connectorId);
+        if (materializedConnector != null) {
+            Connector connector = materializedConnector.getConnector();
             try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(connector.getClass().getClassLoader())) {
                 connector.shutdown();
             }
@@ -320,6 +335,7 @@ public class ConnectorManager
         private final List<PropertyMetadata<?>> sessionProperties;
         private final List<PropertyMetadata<?>> tableProperties;
         private final List<PropertyMetadata<?>> schemaProperties;
+        private final List<PropertyMetadata<?>> columnProperties;
 
         public MaterializedConnector(ConnectorId connectorId, Connector connector)
         {
@@ -365,17 +381,6 @@ public class ConnectorManager
             }
             catch (UnsupportedOperationException ignored) {
             }
-
-            if (connectorPageSinkProvider == null) {
-                ConnectorRecordSinkProvider connectorRecordSinkProvider;
-                try {
-                    connectorRecordSinkProvider = connector.getRecordSinkProvider();
-                    requireNonNull(connectorRecordSinkProvider, format("Connector %s returned a null record sink provider", connectorId));
-                    connectorPageSinkProvider = new RecordPageSinkProvider(connectorRecordSinkProvider);
-                }
-                catch (UnsupportedOperationException ignored) {
-                }
-            }
             this.pageSinkProvider = Optional.ofNullable(connectorPageSinkProvider);
 
             ConnectorIndexProvider indexProvider = null;
@@ -415,6 +420,10 @@ public class ConnectorManager
             List<PropertyMetadata<?>> schemaProperties = connector.getSchemaProperties();
             requireNonNull(schemaProperties, "Connector %s returned a null schema properties set");
             this.schemaProperties = ImmutableList.copyOf(schemaProperties);
+
+            List<PropertyMetadata<?>> columnProperties = connector.getColumnProperties();
+            requireNonNull(columnProperties, "Connector %s returned a null column properties set");
+            this.columnProperties = ImmutableList.copyOf(columnProperties);
         }
 
         public ConnectorId getConnectorId()
@@ -475,6 +484,11 @@ public class ConnectorManager
         public List<PropertyMetadata<?>> getTableProperties()
         {
             return tableProperties;
+        }
+
+        public List<PropertyMetadata<?>> getColumnProperties()
+        {
+            return columnProperties;
         }
 
         public List<PropertyMetadata<?>> getSchemaProperties()

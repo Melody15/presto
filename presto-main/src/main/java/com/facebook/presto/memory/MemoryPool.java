@@ -14,19 +14,24 @@
 package com.facebook.presto.memory;
 
 import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.memory.MemoryAllocation;
 import com.facebook.presto.spi.memory.MemoryPoolId;
 import com.facebook.presto.spi.memory.MemoryPoolInfo;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.units.DataSize;
 import org.weakref.jmx.Managed;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.facebook.presto.operator.Operator.NOT_BLOCKED;
@@ -47,11 +52,16 @@ public class MemoryPool
 
     @Nullable
     @GuardedBy("this")
-    private SettableFuture<?> future;
+    private NonCancellableMemoryFuture<?> future;
 
     @GuardedBy("this")
     // TODO: It would be better if we just tracked QueryContexts, but their lifecycle is managed by a weak reference, so we can't do that
     private final Map<QueryId, Long> queryMemoryReservations = new HashMap<>();
+
+    // This map keeps track of all the tagged allocations, e.g., query-1 -> ['TableScanOperator': 10MB, 'LazyOutputBuffer': 5MB, ...]
+    @GuardedBy("this")
+    private final Map<QueryId, Map<String, Long>> taggedMemoryAllocations = new HashMap<>();
+
     @GuardedBy("this")
     private final Map<QueryId, Long> queryMemoryRevocableReservations = new HashMap<>();
 
@@ -71,7 +81,15 @@ public class MemoryPool
 
     public synchronized MemoryPoolInfo getInfo()
     {
-        return new MemoryPoolInfo(maxBytes, reservedBytes, reservedRevocableBytes, queryMemoryReservations, queryMemoryRevocableReservations);
+        Map<QueryId, List<MemoryAllocation>> memoryAllocations = new HashMap<>();
+        taggedMemoryAllocations.forEach((queryId, allocationMap) -> {
+            List<MemoryAllocation> allocations = new ArrayList<>();
+            allocationMap.forEach((tag, allocation) -> {
+                allocations.add(new MemoryAllocation(tag, allocation));
+            });
+            memoryAllocations.put(queryId, allocations);
+        });
+        return new MemoryPoolInfo(maxBytes, reservedBytes, reservedRevocableBytes, queryMemoryReservations, memoryAllocations, queryMemoryRevocableReservations);
     }
 
     public void addListener(MemoryPoolListener listener)
@@ -87,7 +105,7 @@ public class MemoryPool
     /**
      * Reserves the given number of bytes. Caller should wait on the returned future, before allocating more memory.
      */
-    public ListenableFuture<?> reserve(QueryId queryId, long bytes)
+    public ListenableFuture<?> reserve(QueryId queryId, Optional<String> allocationTag, long bytes)
     {
         checkArgument(bytes >= 0, "bytes is negative");
 
@@ -95,11 +113,12 @@ public class MemoryPool
         synchronized (this) {
             if (bytes != 0) {
                 queryMemoryReservations.merge(queryId, bytes, Long::sum);
+                allocationTag.ifPresent(tag -> updateTaggedMemoryAllocations(queryId, tag, bytes));
             }
             reservedBytes += bytes;
             if (getFreeBytes() <= 0) {
                 if (future == null) {
-                    future = SettableFuture.create();
+                    future = NonCancellableMemoryFuture.create();
                 }
                 checkState(!future.isDone(), "future is already completed");
                 result = future;
@@ -111,6 +130,11 @@ public class MemoryPool
 
         onMemoryReserved();
         return result;
+    }
+
+    public ListenableFuture<?> reserve(QueryId queryId, long bytes)
+    {
+        return reserve(queryId, Optional.empty(), bytes);
     }
 
     private void onMemoryReserved()
@@ -130,7 +154,7 @@ public class MemoryPool
             reservedRevocableBytes += bytes;
             if (getFreeBytes() <= 0) {
                 if (future == null) {
-                    future = SettableFuture.create();
+                    future = NonCancellableMemoryFuture.create();
                 }
                 checkState(!future.isDone(), "future is already completed");
                 result = future;
@@ -147,7 +171,7 @@ public class MemoryPool
     /**
      * Try to reserve the given number of bytes. Return value indicates whether the caller may use the requested memory.
      */
-    public boolean tryReserve(QueryId queryId, long bytes)
+    public boolean tryReserve(QueryId queryId, Optional<String> allocationTag, long bytes)
     {
         checkArgument(bytes >= 0, "bytes is negative");
         synchronized (this) {
@@ -157,6 +181,7 @@ public class MemoryPool
             reservedBytes += bytes;
             if (bytes != 0) {
                 queryMemoryReservations.merge(queryId, bytes, Long::sum);
+                allocationTag.ifPresent(tag -> updateTaggedMemoryAllocations(queryId, tag, bytes));
             }
         }
 
@@ -164,7 +189,12 @@ public class MemoryPool
         return true;
     }
 
-    public synchronized void free(QueryId queryId, long bytes)
+    public boolean tryReserve(QueryId queryId, long bytes)
+    {
+        return tryReserve(queryId, Optional.empty(), bytes);
+    }
+
+    public synchronized void free(QueryId queryId, Optional<String> allocationTag, long bytes)
     {
         checkArgument(bytes >= 0, "bytes is negative");
         checkArgument(reservedBytes >= bytes, "tried to free more memory than is reserved");
@@ -179,15 +209,22 @@ public class MemoryPool
         queryReservation -= bytes;
         if (queryReservation == 0) {
             queryMemoryReservations.remove(queryId);
+            taggedMemoryAllocations.remove(queryId);
         }
         else {
             queryMemoryReservations.put(queryId, queryReservation);
+            allocationTag.ifPresent(tag -> updateTaggedMemoryAllocations(queryId, tag, -bytes));
         }
         reservedBytes -= bytes;
         if (getFreeBytes() > 0 && future != null) {
             future.set(null);
             future = null;
         }
+    }
+
+    public synchronized void free(QueryId queryId, long bytes)
+    {
+        free(queryId, Optional.empty(), bytes);
     }
 
     public synchronized void freeRevocable(QueryId queryId, long bytes)
@@ -214,6 +251,20 @@ public class MemoryPool
             future.set(null);
             future = null;
         }
+    }
+
+    public synchronized ListenableFuture<?> moveQuery(QueryId queryId, MemoryPool targetMemoryPool)
+    {
+        long originalReserved = getQueryMemoryReservation(queryId);
+        long originalRevocableReserved = getQueryRevocableMemoryReservation(queryId);
+        // Get the tags before we call free() as that would remove the tags and we will lose the tags.
+        Map<String, Long> taggedAllocations = taggedMemoryAllocations.remove(queryId);
+        ListenableFuture<?> future = targetMemoryPool.reserve(queryId, originalReserved);
+        free(queryId, originalReserved);
+        targetMemoryPool.reserveRevocable(queryId, originalRevocableReserved);
+        freeRevocable(queryId, originalRevocableReserved);
+        targetMemoryPool.taggedMemoryAllocations.put(queryId, taggedAllocations);
+        return future;
     }
 
     /**
@@ -243,6 +294,16 @@ public class MemoryPool
         return reservedRevocableBytes;
     }
 
+    synchronized long getQueryMemoryReservation(QueryId queryId)
+    {
+        return queryMemoryReservations.getOrDefault(queryId, 0L);
+    }
+
+    synchronized long getQueryRevocableMemoryReservation(QueryId queryId)
+    {
+        return queryMemoryRevocableReservations.getOrDefault(queryId, 0L);
+    }
+
     @Override
     public synchronized String toString()
     {
@@ -254,5 +315,47 @@ public class MemoryPool
                 .add("reservedRevocableBytes", reservedRevocableBytes)
                 .add("future", future)
                 .toString();
+    }
+
+    private static class NonCancellableMemoryFuture<V>
+            extends AbstractFuture<V>
+    {
+        public static <V> NonCancellableMemoryFuture<V> create()
+        {
+            return new NonCancellableMemoryFuture<V>();
+        }
+
+        @Override
+        public boolean set(@Nullable V value)
+        {
+            return super.set(value);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning)
+        {
+            throw new UnsupportedOperationException("cancellation is not supported");
+        }
+    }
+
+    private synchronized void updateTaggedMemoryAllocations(QueryId queryId, String allocationTag, long delta)
+    {
+        Map<String, Long> allocations = taggedMemoryAllocations.computeIfAbsent(queryId, ignored -> new HashMap<>());
+        allocations.compute(allocationTag, (ignored, oldValue) -> {
+            if (oldValue == null) {
+                return delta;
+            }
+            long newValue = oldValue.longValue() + delta;
+            if (newValue == 0) {
+                return null;
+            }
+            return newValue;
+        });
+    }
+
+    @VisibleForTesting
+    synchronized Map<QueryId, Map<String, Long>> getTaggedMemoryAllocations()
+    {
+        return ImmutableMap.copyOf(taggedMemoryAllocations);
     }
 }

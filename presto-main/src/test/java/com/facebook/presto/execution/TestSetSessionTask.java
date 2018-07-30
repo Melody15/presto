@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
+import com.facebook.presto.metadata.ColumnPropertyManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.SchemaPropertyManager;
 import com.facebook.presto.metadata.SessionPropertyManager;
@@ -44,7 +45,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.spi.session.PropertyMetadata.stringSessionProperty;
+import static com.facebook.presto.spi.session.PropertyMetadata.stringProperty;
 import static com.facebook.presto.testing.TestingSession.createBogusTestingCatalog;
 import static com.facebook.presto.transaction.TransactionManager.createTestTransactionManager;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
@@ -73,16 +74,17 @@ public class TestSetSessionTask
                 new SessionPropertyManager(),
                 new SchemaPropertyManager(),
                 new TablePropertyManager(),
+                new ColumnPropertyManager(),
                 transactionManager);
 
-        metadata.getSessionPropertyManager().addSystemSessionProperty(stringSessionProperty(
+        metadata.getSessionPropertyManager().addSystemSessionProperty(stringProperty(
                 CATALOG_NAME,
                 "test property",
                 null,
                 false));
 
         Catalog bogusTestingCatalog = createBogusTestingCatalog(CATALOG_NAME);
-        metadata.getSessionPropertyManager().addConnectorSessionProperties(bogusTestingCatalog.getConnectorId(), ImmutableList.of(stringSessionProperty(
+        metadata.getSessionPropertyManager().addConnectorSessionProperties(bogusTestingCatalog.getConnectorId(), ImmutableList.of(stringProperty(
                 "bar",
                 "test property",
                 null,
@@ -94,14 +96,12 @@ public class TestSetSessionTask
 
     @AfterClass(alwaysRun = true)
     public void tearDown()
-            throws Exception
     {
         executor.shutdownNow();
     }
 
     @Test
     public void testSetSession()
-            throws Exception
     {
         testSetSession(new StringLiteral("baz"), "baz");
         testSetSession(new FunctionCall(QualifiedName.of("concat"), ImmutableList.of(
@@ -111,7 +111,6 @@ public class TestSetSessionTask
 
     @Test
     public void testSetSessionWithParameters()
-            throws Exception
     {
         List<Expression> expressionList = new ArrayList<>();
         expressionList.add(new StringLiteral("ban"));
@@ -120,13 +119,11 @@ public class TestSetSessionTask
     }
 
     private void testSetSession(Expression expression, String expectedValue)
-            throws Exception
     {
         testSetSessionWithParameters(expression, expectedValue, emptyList());
     }
 
     private void testSetSessionWithParameters(Expression expression, String expectedValue, List<Expression> parameters)
-            throws Exception
     {
         QueryStateMachine stateMachine = QueryStateMachine.begin(new QueryId("query"), "set foo.bar = 'baz'", TEST_SESSION, URI.create("fake://uri"), false, transactionManager, accessControl, executor, metadata);
         getFutureValue(new SetSessionTask().execute(new SetSession(QualifiedName.of(CATALOG_NAME, "bar"), expression), transactionManager, metadata, accessControl, stateMachine, parameters));

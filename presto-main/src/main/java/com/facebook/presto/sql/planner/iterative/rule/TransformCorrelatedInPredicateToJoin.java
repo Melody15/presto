@@ -23,8 +23,6 @@ import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.iterative.Rule;
-import com.facebook.presto.sql.planner.optimizations.TransformCorrelatedScalarAggregationToJoin;
-import com.facebook.presto.sql.planner.optimizations.TransformUncorrelatedInPredicateSubqueryToSemiJoin;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
@@ -37,7 +35,6 @@ import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.ComparisonExpressionType;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.InPredicate;
@@ -50,7 +47,6 @@ import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.SearchedCaseExpression;
 import com.facebook.presto.sql.tree.SymbolReference;
 import com.facebook.presto.sql.tree.WhenClause;
-import com.facebook.presto.sql.tree.Window;
 import com.facebook.presto.sql.util.AstUtils;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -93,7 +89,6 @@ import static java.util.Objects.requireNonNull;
  * <p>
  *
  * @see TransformCorrelatedScalarAggregationToJoin
- * @see TransformUncorrelatedInPredicateSubqueryToSemiJoin
  */
 public class TransformCorrelatedInPredicateToJoin
         implements Rule<ApplyNode>
@@ -182,7 +177,7 @@ public class TransformCorrelatedInPredicateToJoin
         Expression joinExpression = and(
                 or(
                         new IsNullPredicate(probeSideSymbol.toSymbolReference()),
-                        new ComparisonExpression(ComparisonExpressionType.EQUAL, probeSideSymbol.toSymbolReference(), buildSideSymbol.toSymbolReference()),
+                        new ComparisonExpression(ComparisonExpression.Operator.EQUAL, probeSideSymbol.toSymbolReference(), buildSideSymbol.toSymbolReference()),
                         new IsNullPredicate(buildSideSymbol.toSymbolReference())),
                 correlationCondition);
 
@@ -207,6 +202,7 @@ public class TransformCorrelatedInPredicateToJoin
                         .put(countNullMatchesSymbol, countWithFilter(nullMatchCondition))
                         .build(),
                 ImmutableList.of(probeSide.getOutputSymbols()),
+                ImmutableList.of(),
                 AggregationNode.Step.SINGLE,
                 Optional.empty(),
                 Optional.empty());
@@ -248,8 +244,9 @@ public class TransformCorrelatedInPredicateToJoin
     {
         FunctionCall countCall = new FunctionCall(
                 QualifiedName.of("count"),
-                Optional.<Window>empty(),
+                Optional.empty(),
                 Optional.of(condition),
+                Optional.empty(),
                 false,
                 ImmutableList.<Expression>of()); /* arguments */
 
@@ -262,7 +259,7 @@ public class TransformCorrelatedInPredicateToJoin
     private static Expression isGreaterThan(Symbol symbol, long value)
     {
         return new ComparisonExpression(
-                ComparisonExpressionType.GREATER_THAN,
+                ComparisonExpression.Operator.GREATER_THAN,
                 symbol.toSymbolReference(),
                 bigint(value));
     }
@@ -290,9 +287,6 @@ public class TransformCorrelatedInPredicateToJoin
         return new BooleanLiteral(value.toString());
     }
 
-    /**
-     * TODO consult common parts with {@link com.facebook.presto.sql.planner.optimizations.TransformCorrelatedScalarAggregationToJoin.Rewriter}
-     */
     private static class DecorrelatingVisitor
             extends PlanVisitor<Optional<Decorrelated>, PlanNode>
     {

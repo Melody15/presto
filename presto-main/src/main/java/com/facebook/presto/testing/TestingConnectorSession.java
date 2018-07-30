@@ -19,6 +19,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.TimeZoneKey;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
@@ -41,36 +42,45 @@ public class TestingConnectorSession
     public static final ConnectorSession SESSION = new TestingConnectorSession(ImmutableList.of());
 
     private final String queryId;
+    private final String path;
     private final Identity identity;
     private final Optional<String> source;
     private final TimeZoneKey timeZoneKey;
     private final Locale locale;
+    private final Optional<String> traceToken;
     private final long startTime;
     private final Map<String, PropertyMetadata<?>> properties;
     private final Map<String, Object> propertyValues;
+    private final boolean isLegacyTimestamp;
 
     public TestingConnectorSession(List<PropertyMetadata<?>> properties)
     {
-        this("user", Optional.of("test"), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of());
+        this("user", "path", Optional.of("test"), Optional.empty(), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of(), new FeaturesConfig().isLegacyTimestamp());
     }
 
     public TestingConnectorSession(
             String user,
+            String path,
             Optional<String> source,
+            Optional<String> traceToken,
             TimeZoneKey timeZoneKey,
             Locale locale,
             long startTime,
             List<PropertyMetadata<?>> propertyMetadatas,
-            Map<String, Object> propertyValues)
+            Map<String, Object> propertyValues,
+            boolean isLegacyTimestamp)
     {
         this.queryId = queryIdGenerator.createNextQueryId().toString();
+        this.path = requireNonNull(path, "path is null");
         this.identity = new Identity(requireNonNull(user, "user is null"), Optional.empty());
         this.source = requireNonNull(source, "source is null");
+        this.traceToken = requireNonNull(traceToken, "traceToken is null");
         this.timeZoneKey = requireNonNull(timeZoneKey, "timeZoneKey is null");
         this.locale = requireNonNull(locale, "locale is null");
         this.startTime = startTime;
         this.properties = Maps.uniqueIndex(propertyMetadatas, PropertyMetadata::getName);
         this.propertyValues = ImmutableMap.copyOf(propertyValues);
+        this.isLegacyTimestamp = isLegacyTimestamp;
     }
 
     @Override
@@ -83,6 +93,12 @@ public class TestingConnectorSession
     public Optional<String> getSource()
     {
         return source;
+    }
+
+    @Override
+    public String getPath()
+    {
+        return path;
     }
 
     @Override
@@ -110,6 +126,24 @@ public class TestingConnectorSession
     }
 
     @Override
+    public Optional<String> getTraceToken()
+    {
+        return traceToken;
+    }
+
+    @Override
+    public boolean isLegacyTimestamp()
+    {
+        return isLegacyTimestamp;
+    }
+
+    @Override
+    public boolean isLegacyRoundNBigint()
+    {
+        return false;
+    }
+
+    @Override
     public <T> T getProperty(String name, Class<T> type)
     {
         PropertyMetadata<?> metadata = properties.get(name);
@@ -129,6 +163,7 @@ public class TestingConnectorSession
         return toStringHelper(this)
                 .add("user", getUser())
                 .add("source", source.orElse(null))
+                .add("traceToken", traceToken.orElse(null))
                 .add("timeZoneKey", timeZoneKey)
                 .add("locale", locale)
                 .add("startTime", startTime)

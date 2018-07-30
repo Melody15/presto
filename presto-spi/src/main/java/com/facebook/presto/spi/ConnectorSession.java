@@ -30,13 +30,23 @@ public interface ConnectorSession
         return getIdentity().getUser();
     }
 
+    String getPath();
+
     Identity getIdentity();
 
     TimeZoneKey getTimeZoneKey();
 
     Locale getLocale();
 
+    Optional<String> getTraceToken();
+
     long getStartTime();
+
+    @Deprecated
+    boolean isLegacyTimestamp();
+
+    @Deprecated
+    boolean isLegacyRoundNBigint();
 
     <T> T getProperty(String name, Class<T> type);
 }

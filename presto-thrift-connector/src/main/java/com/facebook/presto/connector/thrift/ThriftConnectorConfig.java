@@ -27,7 +27,7 @@ public class ThriftConnectorConfig
 {
     private DataSize maxResponseSize = new DataSize(16, MEGABYTE);
     private int metadataRefreshThreads = 1;
-    private int retryDriverThreads = 8;
+    private int lookupRequestsConcurrency = 1;
 
     @NotNull
     @MinDataSize("1MB")
@@ -58,15 +58,15 @@ public class ThriftConnectorConfig
     }
 
     @Min(1)
-    public int getRetryDriverThreads()
+    public int getLookupRequestsConcurrency()
     {
-        return retryDriverThreads;
+        return lookupRequestsConcurrency;
     }
 
-    @Config("presto-thrift.retry-driver-threads")
-    public ThriftConnectorConfig setRetryDriverThreads(int retryDriverThreads)
+    @Config("presto-thrift.lookup-requests-concurrency")
+    public ThriftConnectorConfig setLookupRequestsConcurrency(int lookupRequestsConcurrency)
     {
-        this.retryDriverThreads = retryDriverThreads;
+        this.lookupRequestsConcurrency = lookupRequestsConcurrency;
         return this;
     }
 }

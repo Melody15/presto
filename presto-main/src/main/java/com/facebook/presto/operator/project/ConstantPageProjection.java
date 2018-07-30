@@ -13,17 +13,16 @@
  */
 package com.facebook.presto.operator.project;
 
+import com.facebook.presto.operator.CompletedWork;
 import com.facebook.presto.operator.DriverYieldSignal;
+import com.facebook.presto.operator.Work;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-
-import java.util.Optional;
 
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 
@@ -38,7 +37,7 @@ public class ConstantPageProjection
     public ConstantPageProjection(Object value, Type type)
     {
         this.type = type;
-        BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1);
+        BlockBuilder blockBuilder = type.createBlockBuilder(null, 1);
         writeNativeValue(type, blockBuilder, value);
         this.value = blockBuilder.build();
     }
@@ -62,27 +61,8 @@ public class ConstantPageProjection
     }
 
     @Override
-    public PageProjectionOutput project(ConnectorSession session, DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
+    public Work<Block> project(ConnectorSession session, DriverYieldSignal yieldSignal, Page page, SelectedPositions selectedPositions)
     {
-        return new ConstantPageProjectionOutput(value, selectedPositions.size());
-    }
-
-    private class ConstantPageProjectionOutput
-            implements PageProjectionOutput
-    {
-        private final Block value;
-        private final int size;
-
-        public ConstantPageProjectionOutput(Block value, int size)
-        {
-            this.value = value;
-            this.size = size;
-        }
-
-        @Override
-        public Optional<Block> compute()
-        {
-            return Optional.of(new RunLengthEncodedBlock(value, size));
-        }
+        return new CompletedWork<>(new RunLengthEncodedBlock(value, selectedPositions.size()));
     }
 }

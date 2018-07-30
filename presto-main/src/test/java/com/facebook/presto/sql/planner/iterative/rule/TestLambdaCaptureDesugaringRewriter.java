@@ -37,12 +37,11 @@ public class TestLambdaCaptureDesugaringRewriter
 {
     @Test
     public void testRewriteBasicLambda()
-            throws Exception
     {
         final Map<Symbol, Type> symbols = ImmutableMap.of(new Symbol("a"), BigintType.BIGINT);
         final SymbolAllocator allocator = new SymbolAllocator(symbols);
 
-        assertEquals(rewrite(expression("x -> a + x"), symbols, allocator),
+        assertEquals(rewrite(expression("x -> a + x"), allocator.getTypes(), allocator),
                      new BindExpression(
                              ImmutableList.of(expression("a")),
                              new LambdaExpression(
